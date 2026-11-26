@@ -1,27 +1,31 @@
 # Genra AV design tokens (v0, 26/11/2026)
 
 Small on purpose: the pattern of the top AV brands (graphite surfaces, one accent, status colours
-that mean one thing each), with Genra's own silver ☶ mark. Dark is the default theme; light mirrors it.
-Mock-ups: `docs/ux/` (to be added with the screen mock-ups).
+that mean one thing each), with Genra's own ☶ mark. **Light is the default theme** (Hoan, 26/11:
+office PCs and the apps officers use all day are light; most AV vendors default to light). Dark is
+offered and follows the OS setting when the user picks "Theo hệ thống".
+Mock-ups: `docs/ux/mocks/v1/` (light and dark).
 
 ## Colour roles
 
 Each colour has one meaning. **Primary is never used for status, status colours are never used for actions.**
 
-| Role | Dark | Light | Use |
+| Role | Light (default) | Dark | Use |
 |---|---|---|---|
-| `bg` | `#0F1115` | `#F6F7F9` | Window background |
-| `surface` | `#171A21` | `#FFFFFF` | Cards |
-| `surface-2` | `#1F232C` | `#EEF0F3` | Selected nav item, inputs |
-| `border` | `#2A2F3A` | `#E3E6EB` | Card and divider lines |
-| `text` | `#F2F4F7` | `#12151B` | Main text |
-| `text-muted` | `#A3AAB8` | `#5B6270` | Secondary text |
+| `bg` | `#F6F7F9` | `#0F1115` | Window background |
+| `surface` | `#FFFFFF` | `#171A21` | Cards |
+| `surface-2` | `#EEF0F3` | `#1F232C` | Selected nav item, inputs |
+| `border` | `#E3E6EB` | `#2A2F3A` | Card and divider lines |
+| `text` | `#12151B` | `#F2F4F7` | Main text |
+| `text-muted` | `#5B6270` | `#A3AAB8` | Secondary text |
 | `primary` | `#2F6BEF` | `#2F6BEF` | Buttons, focus ring, selected marker (Genra Lam) |
-| `primary-text` | `#6E9BFF` | `#2F6BEF` | Links and text actions |
-| `success` | `#2EBD85` | `#16935F` | "An toàn", done |
-| `warning` | `#F5A524` | `#B26A00` | Needs a look (suspicious, Defender off) |
-| `danger` | `#D93A40` | `#C62F35` | Malware only |
-| `mark` | silver `#FFFFFF → #DADDE3 → #A9AFBA` | graphite `#3A3F4A → #15171C` | The ☶ mark, nothing else |
+| `primary-text` | `#2F6BEF` | `#6E9BFF` | Links and text actions |
+| `success` | `#11804F` | `#2EBD85` | "An toàn", done |
+| `warning` | `#97590A` | `#F5A524` | Needs a look (suspicious, Defender off) |
+| `danger` | `#C62F35` | `#D93A40` | Malware only |
+
+Icons may use the brighter `#16935F` / `#F5A524` fills (with a white / dark glyph); text uses the tokens above.
+| `mark` | graphite `#3A3F4A → #15171C` | silver `#FFFFFF → #DADDE3 → #A9AFBA` | The ☶ mark, nothing else |
 
 Why blue (Hoan, 26/11): yellow and red already mean warning and danger, so an accent in either
 blurs "press here" with "be careful". Blue carries no status meaning and reads as trustworthy.
@@ -29,15 +33,14 @@ Five-element story still holds: the silver mark is Metal, the blue UI is Water; 
 
 ### Contrast (WCAG 2.1, checked 26/11)
 
-| Pair | Ratio |
-|---|---|
-| White on `primary` | 4.70 (AA) |
-| `primary-text` on dark `bg` / `surface` | 7.01 / 6.46 |
-| `primary` on white | 4.70 (AA) |
-| `text-muted` on dark `surface` / on white | 7.46 / 6.13 |
-| White on `danger` | 4.54 (AA) |
-| `success` on dark `surface` | 7.24 |
-| Dark text on `warning` | 9.26 (warning chips use dark text, never white) |
+| Pair | Light (default) | Dark |
+|---|---|---|
+| White on `primary` (buttons) | 4.70 (AA) | 4.70 (AA) |
+| `primary-text` on `surface` (links) | 4.70 (AA) | 6.46 |
+| `text-muted` on `surface` | 6.13 | 7.46 |
+| `success` text on `surface` / `bg` | 4.97 / 4.64 (AA) | 7.24 |
+| `warning` text on `surface` / `bg` | 5.60 / 5.23 (AA) | n/a (warning chips use dark text on `#F5A524`: 9.26) |
+| White on `danger` | 5.44 | 4.54 (AA) |
 
 ## Type
 

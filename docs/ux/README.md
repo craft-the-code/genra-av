@@ -16,7 +16,12 @@ machine and the files, and leaves everything working. The user presses one butto
 Rules for every repair:
 
 1. **Show the plan first, in plain words.** "Gỡ sâu khỏi Excel · làm sạch 3 tệp · không đụng gì khác".
-   One button "Dọn giúp tôi"; the list of steps is behind "Xem chi tiết".
+   One button "Dọn sạch giúp tôi"; the list of steps is behind "Xem chi tiết".
+   **Clean the machine, not just the file** (Hoan, 26/11): when a threat is found, the default action
+   cleans the file *and* removes the worm from the machine and the other infected files, because the
+   people we serve cannot be expected to do the second half themselves. "Chỉ làm sạch tệp này" stays
+   as a secondary link. On the web check (which cannot touch the machine) the same button becomes
+   "Tải Genra để dọn máy".
 2. **Only known, reversible actions.** Repairs come from a fixed list in the code (remove a worm
    workbook from XLSTART, write a macro-free copy, move a file aside, reset an Office macro setting).
    Rule packs can *choose* among these actions but never add new kinds. No registry edits, drivers,
@@ -41,7 +46,7 @@ This puts a desktop repair engine early: the web check (Q3) finds problems, the 
 4. **Nothing is lost.** Every repair can be undone for 30 days; files are moved aside, never deleted.
 5. **Quiet by default.** Notify only when the user has something to do; no "you are protected" pop-ups.
 6. **Next to Defender, not against it.** Show Defender's state as one health line; never turn it off.
-7. **Native and modern on each OS.** Fluent (Windows 11) and standard macOS look; respects light/dark,
+7. **Native and modern on each OS.** Fluent (Windows 11) and standard macOS look; **light theme by default**, dark as an option; respects
    text size and screen readers. No custom chrome.
 8. **Vietnamese first,** written for reading aloud: short sentences, everyday words, no English
    unless it is what the user sees on screen elsewhere (Excel, Zalo).
@@ -50,11 +55,19 @@ This puts a desktop repair engine early: the web check (Q3) finds problems, the 
 
 ## Screens to mock up first (P1)
 
+Mock-ups v1 (26/11): [light, the default](mocks/v1/overview-light.png) and
+[dark](mocks/v1/overview-dark.png); one PNG + SVG per screen in `mocks/v1/light|dark/`, regenerated
+by `python3 mocks/v1/generate.py mocks/v1 light|dark`. Screens 1 → 3 → 5 → 4 follow one story: an infected
+Excel file arrives, is quarantined, the user presses "Dọn sạch giúp tôi", Genra waits for Excel to be
+closed, and reports machine and files clean.
+
 1. **Home**: status card, "Kiểm tra tệp" (drop zone / pick a file), last update time of the rules.
 2. **Result: clean**: "Tệp này an toàn" with what was checked, one line.
-3. **Result: threat**: name in plain words ("Sâu lây qua Excel"), what it does (3 bullets), button
-   "Làm sạch tệp" + secondary "Xem chi tiết". Malware result also shows "Máy bạn có thể đã nhiễm".
-4. **Clean done**: where the clean copy is, "Mở thư mục", what to do next (send the clean copy back).
+3. **Result: threat**: name in plain words ("Sâu lây qua Excel"), what it does (3 bullets), the
+   list of what Genra will do, one primary button **"Dọn sạch giúp tôi"** (file + machine), secondary
+   "Xem chi tiết"; "Chỉ làm sạch tệp này" and "báo nhầm" as small links.
+4. **All clean**: "Đã dọn sạch máy và tệp", what was done (worm removed, files cleaned, verified),
+   where the clean copies are, what to do next (send them back), "Hoàn tác".
 5. **Machine repair** (desktop): found the worm in Excel startup, "Gỡ khỏi máy", undo for 30 days.
 6. **Health**: Defender on/updated, Office macro setting, rules up to date.
 
