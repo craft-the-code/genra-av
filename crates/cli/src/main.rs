@@ -57,6 +57,13 @@ enum Cmd {
     /// Quarantined files: list, restore, purge expired.
     #[command(subcommand)]
     Quarantine(QuarantineCmd),
+    /// Write a macro-free copy of an Office file as <name>.clean.<ext>. The original is not changed.
+    Clean {
+        input: PathBuf,
+        /// Folder for the copy (default: next to the input).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Rule pack tooling for whoever publishes packs.
     #[command(subcommand)]
     Rules(RulesCmd),
@@ -200,6 +207,34 @@ fn run() -> Result<bool> {
             std::fs::write(&out, &bin)?;
             use sha2::Digest;
             eprintln!("wrote {} ({} hashes), sha256 {}", out.display(), bin.len() / 32, hex::encode(sha2::Sha256::digest(&bin)));
+            Ok(false)
+        }
+        Cmd::Clean { input, out } => {
+            let size = std::fs::metadata(&input).with_context(|| format!("reading {}", input.display()))?.len();
+            if size > MAX_FILE {
+                bail!("{} is over {} MB", input.display(), MAX_FILE / 1024 / 1024);
+            }
+            let bytes = std::fs::read(&input)?;
+            let cleaned = genra_av_core::clean::clean(&bytes)?;
+            let ext = cleaned
+                .new_extension
+                .map(str::to_string)
+                .or_else(|| input.extension().map(|e| e.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let dir = out.unwrap_or_else(|| input.parent().map(Path::to_path_buf).unwrap_or_default());
+            let dest = dir.join(format!("{stem}.clean.{ext}"));
+            if dest.exists() {
+                bail!("{} exists; refusing to overwrite", dest.display());
+            }
+            std::fs::write(&dest, &cleaned.bytes)?;
+            for r in &cleaned.removed {
+                println!("removed  {r}");
+            }
+            for k in &cleaned.kept {
+                println!("kept     {k}");
+            }
+            println!("wrote    {}", dest.display());
             Ok(false)
         }
         Cmd::Rules(RulesCmd::Keygen { out }) => {
