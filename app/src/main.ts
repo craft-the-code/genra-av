@@ -61,6 +61,7 @@ const state = {
   },
   history: null as api.HistoryView | null,
   historyAll: false,
+  hitsAll: false,
   machine: null as api.MachineOverview | null,
   machineLoading: false,
   machineError: "",
@@ -251,7 +252,7 @@ function band(): string {
     if (last && (last.hits ?? 0) > 0) {
       tn = "warn";
       title = t("band.previous.title", { n: last.hits ?? 0 });
-      text = [t("band.previous.text")];
+      text = [t(openItems(last).length ? "band.previous.listed" : "band.previous.text")];
       action = primary("quick", t("band.scan"));
     } else if (last) {
       ok = true;
@@ -280,6 +281,58 @@ function band(): string {
       ${text.map((x) => `<p>${esc(x)}</p>`).join("")}
       ${action ? `<div class="actions">${action}</div>` : ""}
     </div>
+  </section>`;
+}
+
+const HIT_ROWS = 5;
+
+/** Files a quick scan found that an earlier repair or quarantine has not dealt with yet. */
+function openItems(e: api.Entry): api.HitItem[] {
+  const dealt = new Set(
+    (state.history?.entries ?? [])
+      .filter((x) => x.at >= e.at && (x.kind === "repair" || x.kind === "quarantine") && !x.undone && x.path)
+      .map((x) => x.path as string),
+  );
+  return (e.items ?? []).filter((i) => !dealt.has(i.path) && !state.quick.handled.has(i.path));
+}
+
+/** "Tệp tìm thấy": every file the quick scan found, each one press from its own result. */
+function hitsCard(): string {
+  if (state.quick.running) return "";
+  type HitRow = { tone: Tone; name: string; sub: string; action: string };
+  const folder = (p: string) => shortFolder(p.slice(0, Math.max(0, p.length - baseName(p).length)));
+  let rows: HitRow[] = [];
+  const current = remainingHits();
+  if (current.length) {
+    rows = current.map((r, i) => ({
+      tone: tone(r),
+      name: r.name,
+      sub: [r.hash_only ? t("status.hash") : familyName(topFinding(r)?.family ?? ""), folder(r.path)].filter(Boolean).join(" · "),
+      action: `<button class="link" data-action="hit-open" data-path="${esc(r.path)}" data-fid="hit-${i}">${esc(t("hits.open"))}<span class="sr-only"> ${esc(r.name)}</span></button>`,
+    }));
+  } else if (!state.quick.result) {
+    const last = lastQuickEntry();
+    if (last) {
+      rows = openItems(last).map((it, i) => ({
+        tone: it.hash_only ? "warn" : verdictTone(it.verdict),
+        name: it.name,
+        sub: [it.hash_only ? t("status.hash") : it.family ? familyName(it.family) : "", folder(it.path)].filter(Boolean).join(" · "),
+        action: `<button class="link" data-action="hit-recheck" data-entry="${esc(last.id)}" data-path="${esc(it.path)}" data-fid="hit-${i}">${esc(t("hits.recheck"))}<span class="sr-only"> ${esc(it.name)}</span></button>`,
+      }));
+    }
+  }
+  if (!rows.length) return "";
+  const shown = state.hitsAll ? rows : rows.slice(0, HIT_ROWS);
+  const list = shown
+    .map((r) => `<li class="row">${icon(r.tone)}<div class="row-text"><div class="row-name">${esc(r.name)}</div><div class="row-sub">${esc(r.sub)}</div></div>${r.action}</li>`)
+    .join("");
+  const more =
+    rows.length > HIT_ROWS
+      ? `<button class="link quiet" data-action="hits-all" data-fid="hits-all">${esc(state.hitsAll ? t("history.less") : t("history.more", { n: rows.length }))}</button>`
+      : "";
+  return `<section class="card hits" aria-labelledby="hits-title">
+    <h2 class="overline" id="hits-title">${esc(t("hits.title", { n: rows.length }))}</h2>
+    <ul class="rows">${list}</ul>${more}
   </section>`;
 }
 
@@ -402,6 +455,7 @@ function overview(): string {
   return `<h1 tabindex="-1">${esc(t("overview.title"))}</h1>
     ${noticeBlock()}
     ${band()}
+    ${hitsCard()}
     ${historyCard()}
     <p class="hint">${esc(t("hint.drop"))}</p>`;
 }
@@ -1293,6 +1347,30 @@ root.addEventListener("click", (ev) => {
       }
       break;
     }
+    case "hit-open": {
+      const hit = remainingHits().find((h) => h.path === el.dataset.path);
+      if (hit) {
+        showResult(hit);
+        render(true);
+      }
+      break;
+    }
+    case "hit-recheck": {
+      const path = el.dataset.path ?? "";
+      api
+        .recheckHit(el.dataset.entry ?? "", path)
+        .then(() => scanPath(path))
+        .catch((e) => {
+          state.scan = { status: "error", code: "other", detail: String(e) };
+          state.page = "scan";
+          render(true);
+        });
+      break;
+    }
+    case "hits-all":
+      state.hitsAll = !state.hitsAll;
+      render();
+      break;
     case "history-all":
       state.historyAll = !state.historyAll;
       render();

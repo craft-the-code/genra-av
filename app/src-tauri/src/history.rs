@@ -7,6 +7,21 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const KEEP: usize = 200;
+/// Files listed per quick scan, so the list survives a restart without growing the file much.
+pub const MAX_ITEMS: usize = 100;
+
+/// One file a quick scan found, kept so "Tệp tìm thấy" can list it after the app restarts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HitItem {
+    pub path: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Severity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub hash_only: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +68,9 @@ pub struct Entry {
     pub undo: Option<Undo>,
     #[serde(default)]
     pub undone: bool,
+    /// Quick scan: the files it found (at most [`MAX_ITEMS`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<HitItem>,
 }
 
 pub struct History {
@@ -109,6 +127,7 @@ mod tests {
             hits: None,
             undo,
             undone: false,
+            items: Vec::new(),
         };
         h.push(entry("a", None)).unwrap();
         h.push(entry("b", Some(Undo::Quarantine { id: "q1".into() }))).unwrap();
@@ -117,5 +136,22 @@ mod tests {
         assert_eq!(again.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         assert!(again.entries[0].undone);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quick_scan_items_round_trip_and_old_files_still_load() {
+        let old = r#"[{"id":"a","at":1,"kind":"quick_scan","name":"","files":3,"hits":1}]"#;
+        let e: Vec<Entry> = serde_json::from_str(old).unwrap();
+        assert!(e[0].items.is_empty(), "history written before items existed");
+        let mut e = e[0].clone();
+        e.items.push(HitItem {
+            path: "/x/a.xls".into(),
+            name: "a.xls".into(),
+            verdict: Some(Severity::Malware),
+            family: Some("kangatang".into()),
+            hash_only: false,
+        });
+        let back: Entry = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back.items, e.items);
     }
 }

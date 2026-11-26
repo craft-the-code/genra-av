@@ -95,7 +95,10 @@ export interface Entry {
   undo?: Undo;
   undone: boolean;
   can_undo: boolean;
+  /** Quick scan: the files it found. */
+  items?: HitItem[];
 }
+export interface HitItem { path: string; name: string; verdict?: Severity; family?: string; hash_only: boolean }
 export interface QuarantineItem { id: string; original_path: string; sha256: string; size: number; reason: string; quarantined_at: number }
 export interface HistoryView { entries: Entry[]; other_quarantine: QuarantineItem[] }
 
@@ -143,6 +146,7 @@ export const quarantineFile = (path: string) => invoke<Quarantined>("quarantine_
 export const undo = (u: Undo) => invoke<string[]>("undo", { undo: u });
 export const history = () => invoke<HistoryView>("history");
 export const quickScan = () => invoke<void>("quick_scan");
+export const recheckHit = (entryId: string, path: string) => invoke<void>("recheck_hit", { entryId, path });
 export const reveal = (path: string) => invoke<void>("reveal", { path });
 export const openLink = (which: "privacy" | "terms" | "source") => invoke<void>("open_link", { which });
 export const machineOverview = (refresh = false) => invoke<MachineOverview>("machine_overview", { refresh });
