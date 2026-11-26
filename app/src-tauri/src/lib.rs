@@ -13,7 +13,7 @@ mod util;
 
 use allow::Allow;
 use genra_av_core::rules::{trusted_keys, Severity};
-use history::{Entry, History, Kind, Undo};
+use history::{Entry, HitItem, History, Kind, Undo};
 use machine::Machine;
 use packs::Loaded;
 use repair::RepairView;
@@ -175,6 +175,7 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
         hits: None,
         undo: None,
         undone: false,
+        items: Vec::new(),
     });
     if result.report.verdict.is_some_and(|v| v >= Severity::Suspicious) {
         send_detection(&app, &result.report.sha256, top.map(|f| f.rule.clone()));
@@ -218,6 +219,7 @@ fn execute(app: &AppHandle, plan: genra_av_machine::repair::Plan, name: String, 
                 hits: None,
                 undo: Some(Undo::Group { id: group_id.clone() }),
                 undone: false,
+                items: Vec::new(),
             });
             st.invalidate_overview();
         }
@@ -308,6 +310,7 @@ async fn quarantine_file(app: AppHandle, path: String) -> Result<Quarantined, re
         hits: None,
         undo: Some(Undo::Quarantine { id: item.id.clone() }),
         undone: false,
+        items: Vec::new(),
     });
     Ok(Quarantined { id: item.id, name })
 }
@@ -430,10 +433,40 @@ fn quick_scan(app: AppHandle) -> Result<(), String> {
             hits: Some(result.hits.len() as u64),
             undo: None,
             undone: false,
+            items: result.hits.iter().take(history::MAX_ITEMS).map(hit_item).collect(),
         });
         st.quick_running.store(false, Ordering::SeqCst);
         let _ = a.emit("quick-done", &result);
     });
+    Ok(())
+}
+
+fn hit_item(h: &ScanResult) -> HitItem {
+    let top = h.report.findings.iter().max_by_key(|f| f.severity);
+    HitItem {
+        path: h.path.clone(),
+        name: h.name.clone(),
+        verdict: h.report.verdict,
+        family: top.map(|f| f.family.clone()),
+        hash_only: h.hash_only,
+    }
+}
+
+/// "Kiểm tra lại" on a file an earlier quick scan found. The window may only name a path that
+/// scan recorded; that path is then allowed for `scan_file` like a file the user picked.
+#[tauri::command]
+fn recheck_hit(st: St, entry_id: String, path: String) -> Result<(), String> {
+    let listed = st
+        .history
+        .lock()
+        .map_err(|e| e.to_string())?
+        .entries
+        .iter()
+        .any(|e| e.id == entry_id && e.kind == Kind::QuickScan && e.items.iter().any(|i| i.path == path));
+    if !listed {
+        return Err("not_allowed".into());
+    }
+    st.allow(Path::new(&path));
     Ok(())
 }
 
@@ -496,6 +529,7 @@ async fn fix_health(app: AppHandle, fix: machine::FixId) -> Result<genra_av_mach
             hits: None,
             undo: Some(Undo::Group { id: report.group_id.clone() }),
             undone: false,
+            items: Vec::new(),
         });
     }
     st.invalidate_overview();
@@ -531,6 +565,7 @@ async fn disable_startup(app: AppHandle, id: String) -> Result<genra_av_machine:
             hits: None,
             undo: Some(Undo::Group { id: report.group_id.clone() }),
             undone: false,
+            items: Vec::new(),
         });
     }
     st.invalidate_overview();
@@ -774,6 +809,7 @@ pub fn run() {
             undo,
             history,
             quick_scan,
+            recheck_hit,
             reveal,
             open_link,
             machine_overview,
