@@ -23,5 +23,8 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   rolls back if the original cannot be removed; restore never overwrites or writes through a link;
   30-day expiry.
 - CLI: `genra-av quick-scan [--quarantine]`, `genra-av quarantine list|restore|purge`, `genra-av hashes build`.
+- CI rule pack (`.github/workflows/rule-pack.yml`): MalwareBazaar hashes merged every 6 hours, built in
+  a read-only job, signed with openssl in the protected `rule-pack` environment; versioned hash lists,
+  14-day expiry, refuses to shrink the list. CLI: `rules verify --any-expiry`, `hashes dump`.
 - Backend at `genra-api.craftthecode.dev`: false-positive / bug reports and VBA-only sample upload.
 - Brand, UX decisions, design tokens and v1 mock-ups (`docs/`).
