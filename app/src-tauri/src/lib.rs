@@ -16,8 +16,10 @@ use genra_av_core::rules::{trusted_keys, Severity};
 use history::{Entry, History, Kind, Undo};
 use machine::Machine;
 use packs::Loaded;
+use repair::RepairView;
 use serde::Serialize;
 use settings::Settings;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -38,6 +40,17 @@ struct AppState {
     settings: Mutex<Settings>,
     quick_running: AtomicBool,
     machine: Box<dyn Machine>,
+    /// Plans waiting for Excel to close, by group id; run again as they are.
+    pending: Mutex<HashMap<String, Pending>>,
+    /// "Máy của bạn", read once per session (health checks and signatures take a few seconds).
+    overview: Mutex<Option<Arc<machine::Overview>>>,
+}
+
+/// A repair plan that came back "close Excel first", with what the done screen needs.
+struct Pending {
+    plan: genra_av_machine::repair::Plan,
+    name: String,
+    family: String,
 }
 
 impl AppState {
@@ -55,6 +68,12 @@ impl AppState {
     fn record(&self, e: Entry) {
         if let Ok(mut h) = self.history.lock() {
             let _ = h.push(e);
+        }
+    }
+    /// The next visit to "Máy của bạn" reads the machine again (something was changed).
+    fn invalidate_overview(&self) {
+        if let Ok(mut o) = self.overview.lock() {
+            *o = None;
         }
     }
 }
@@ -163,49 +182,101 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
     Ok(result)
 }
 
-#[derive(Serialize)]
-struct RepairDone {
-    #[serde(flatten)]
-    done: repair::Done,
-    /// What the machine-level plan did, once the `machine` crate provides one.
-    machine: Option<machine::PlanOutcome>,
+/// What the window hears while a repair runs: `planning` while Genra looks for the worm and
+/// other infected files, then each step as it starts and ends.
+#[derive(Clone, Serialize)]
+struct RepairProgress {
+    phase: &'static str,
+    step: Option<genra_av_machine::repair::StepProgress>,
 }
 
-/// "Dọn sạch giúp tôi". Asks the machine seam for a plan first (worm in Excel's startup folder,
-/// other infected files); this build has none, so it does the file-level repair only.
+/// Runs a plan, records a finished repair in the history, keeps a plan that waits for Excel.
+fn execute(app: &AppHandle, plan: genra_av_machine::repair::Plan, name: String, family: String) -> Result<RepairView, repair::Failure> {
+    let st = app.state::<AppState>();
+    let a = app.clone();
+    let report = st
+        .machine
+        .run_plan(&plan, &mut |p| {
+            let _ = a.emit("repair-progress", RepairProgress { phase: "step", step: Some(p) });
+        })
+        .map_err(|e| failure("other", e))?;
+    let view = repair::view(&plan, &name, &family, report);
+    match &view {
+        RepairView::Done { group_id, cleaned, .. } => {
+            for p in repair::clean_paths(&view) {
+                st.allow(&p);
+            }
+            st.record(Entry {
+                id: util::new_id(),
+                at: util::now(),
+                kind: Kind::Repair,
+                name: name.clone(),
+                path: cleaned.first().map(|c| c.clean_path.clone()),
+                verdict: None,
+                family: Some(family.clone()),
+                files: Some(plan.steps.len() as u64),
+                hits: None,
+                undo: Some(Undo::Group { id: group_id.clone() }),
+                undone: false,
+            });
+            st.invalidate_overview();
+        }
+        RepairView::NeedsExcel { group_id, .. } => {
+            if let Ok(mut p) = st.pending.lock() {
+                p.insert(group_id.clone(), Pending { plan, name, family });
+            }
+        }
+        RepairView::NotDone { .. } => {}
+    }
+    Ok(view)
+}
+
+/// "Dọn sạch giúp tôi": cleans the file, takes the worm out of Excel's startup folder and cleans
+/// the other infected workbooks, as one journal group ("Hoàn tác" undoes it all). Refused by the
+/// cleaner: nothing changes and the window offers "Cách ly tệp này".
 #[tauri::command]
-async fn repair_file(app: AppHandle, path: String) -> Result<RepairDone, repair::Failure> {
+async fn repair_file(app: AppHandle, path: String) -> Result<RepairView, repair::Failure> {
     let st = app.state::<AppState>();
     let p = st.allowed(&path).map_err(|e| failure("not_allowed", e))?;
     let rules = st.rules();
-    let data = st.data.clone();
     let a = app.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = a.emit("repair-progress", RepairProgress { phase: "planning", step: None });
+        let report = repair::precheck(&rules, &p)?;
         let st = a.state::<AppState>();
-        let machine = std::fs::read(&p)
-            .ok()
-            .map(|b| genra_av_core::scan_with(&b, Some(&rules.pack), Some(&rules.reputation)))
-            .and_then(|r| st.machine.plan_for_threat(&r, &p).ok())
-            .and_then(|plan| st.machine.run_plan(&plan).ok());
-        repair::run(&data, &rules, &p).map(|done| RepairDone { done, machine })
+        let mut plan = st.machine.plan_for_threat(&p, &report, &rules);
+        repair::keep_cleanable(&mut plan);
+        execute(&a, plan, util::file_name(&p), repair::family_of(&report))
     })
     .await
-    .map_err(|e| failure("other", e))??;
-    st.allow(Path::new(&out.done.clean_path));
-    st.record(Entry {
-        id: util::new_id(),
-        at: util::now(),
-        kind: Kind::Repair,
-        name: out.done.name.clone(),
-        path: Some(out.done.clean_path.clone()),
-        verdict: None,
-        family: Some(out.done.family.clone()),
-        files: None,
-        hits: None,
-        undo: Some(Undo::Repair { id: out.done.id.clone() }),
-        undone: false,
-    });
-    Ok(out)
+    .map_err(|e| failure("other", e))?
+}
+
+/// Runs a plan that waited for Excel again, as it was. Called by the window once Excel is gone.
+#[tauri::command]
+async fn continue_repair(app: AppHandle, group_id: String) -> Result<RepairView, repair::Failure> {
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = a.state::<AppState>();
+        let pending = st.pending.lock().ok().and_then(|mut p| p.remove(&group_id)).ok_or_else(|| failure("not_found", "no repair is waiting"))?;
+        execute(&a, pending.plan, pending.name, pending.family)
+    })
+    .await
+    .map_err(|e| failure("other", e))?
+}
+
+/// Polled every second while a repair waits for Excel.
+#[tauri::command]
+async fn excel_status(app: AppHandle) -> Result<machine::ExcelStatus, String> {
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || a.state::<AppState>().machine.excel_status()).await.map_err(|e| e.to_string())
+}
+
+/// "Đóng Excel giúp tôi": asks Excel to quit; Excel itself asks the user to save. Never killed.
+#[tauri::command]
+async fn close_excel(app: AppHandle) -> Result<(), String> {
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || a.state::<AppState>().machine.ask_excel_to_close()).await.map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]
@@ -241,23 +312,27 @@ async fn quarantine_file(app: AppHandle, path: String) -> Result<Quarantined, re
     Ok(Quarantined { id: item.id, name })
 }
 
-/// "Hoàn tác" / "Lấy lại": one press, for a repair or a quarantined file.
+/// "Hoàn tác" / "Lấy lại": one press, for a whole journal group or a quarantined file.
 #[tauri::command]
-async fn undo(app: AppHandle, undo: Undo) -> Result<String, repair::Failure> {
+async fn undo(app: AppHandle, undo: Undo) -> Result<Vec<String>, repair::Failure> {
     let st = app.state::<AppState>();
     let data = st.data.clone();
     let u = undo.clone();
+    let a = app.clone();
     let restored = tauri::async_runtime::spawn_blocking(move || match &u {
-        Undo::Repair { id } => repair::undo(&data, id),
-        Undo::Quarantine { id } => repair::quarantine(&data).and_then(|q| q.restore(id)).map_err(|e| failure("restore", format!("{e:#}"))),
+        Undo::Group { id } => a.state::<AppState>().machine.undo_group(id).map(|(_, back)| back).map_err(|e| failure("undo", e)),
+        Undo::Quarantine { id } => repair::quarantine(&data).and_then(|q| q.restore(id)).map(|p| vec![p]).map_err(|e| failure("restore", format!("{e:#}"))),
     })
     .await
     .map_err(|e| failure("other", e))??;
-    st.allow(&restored);
+    for p in &restored {
+        st.allow(p);
+    }
     if let Ok(mut h) = st.history.lock() {
         let _ = h.mark_undone(&undo);
     }
-    Ok(restored.to_string_lossy().into_owned())
+    st.invalidate_overview();
+    Ok(restored.iter().map(|p| p.to_string_lossy().into_owned()).collect())
 }
 
 #[derive(Serialize)]
@@ -277,9 +352,7 @@ struct HistoryView {
 #[tauri::command]
 fn history(st: St) -> Result<HistoryView, String> {
     let items = repair::quarantine(&st.data).and_then(|q| q.list()).unwrap_or_default();
-    let repairs: Vec<repair::Record> = std::fs::read_dir(st.data.join("repairs"))
-        .map(|rd| rd.flatten().filter_map(|e| std::fs::read(e.path()).ok()).filter_map(|b| serde_json::from_slice(&b).ok()).collect())
-        .unwrap_or_default();
+    let groups = st.machine.groups();
     let h = st.history.lock().map_err(|e| e.to_string())?;
     let entries: Vec<EntryView> = h
         .entries
@@ -288,22 +361,39 @@ fn history(st: St) -> Result<HistoryView, String> {
             let can_undo = !e.undone
                 && match &e.undo {
                     Some(Undo::Quarantine { id }) => items.iter().any(|i| &i.id == id),
-                    Some(Undo::Repair { id }) => repairs.iter().any(|r| &r.id == id),
+                    Some(Undo::Group { id }) => groups.iter().any(|g| &g.group_id == id && g.can_undo),
                     None => false,
                 };
             EntryView { entry: e.clone(), can_undo }
         })
         .collect();
-    let known: Vec<&str> = h
+    // Quarantine items the journal made (originals of a repair, clean copies taken back by an
+    // undo) belong to their history row, not to the "other" list.
+    let mut known: Vec<String> = h
         .entries
         .iter()
         .filter_map(|e| match &e.undo {
-            Some(Undo::Quarantine { id }) => Some(id.as_str()),
+            Some(Undo::Quarantine { id }) => Some(id.clone()),
             _ => None,
         })
-        .chain(repairs.iter().map(|r| r.quarantine_id.as_str()))
         .collect();
-    let other_quarantine = items.into_iter().filter(|i| !known.contains(&i.id.as_str())).collect();
+    let created: Vec<(PathBuf, String)> = groups
+        .iter()
+        .flat_map(|g| &g.entries)
+        .filter_map(|e| {
+            if let Some(q) = &e.quarantine_id {
+                known.push(q.clone());
+            }
+            match &e.change {
+                genra_av_machine::journal::Change::CreateFile { path, sha256 } => Some((path.clone(), sha256.clone())),
+                _ => None,
+            }
+        })
+        .collect();
+    let other_quarantine = items
+        .into_iter()
+        .filter(|i| !known.contains(&i.id) && !created.iter().any(|(p, sha)| *p == i.original_path && sha.eq_ignore_ascii_case(&i.sha256)))
+        .collect();
     Ok(HistoryView { entries, other_quarantine })
 }
 
@@ -366,9 +456,92 @@ fn open_link(which: String) -> Result<(), String> {
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// "Máy của bạn": health and startup items, read on a background thread once per session
+/// (`refresh` reads again). Read-only.
 #[tauri::command]
-fn machine_overview(st: St) -> machine::Overview {
-    machine::overview(st.machine.as_ref())
+async fn machine_overview(app: AppHandle, refresh: bool) -> Result<Arc<machine::Overview>, String> {
+    let st = app.state::<AppState>();
+    if !refresh {
+        if let Some(o) = st.overview.lock().ok().and_then(|o| o.clone()) {
+            return Ok(o);
+        }
+    }
+    let rules = st.rules();
+    let a = app.clone();
+    let o = tauri::async_runtime::spawn_blocking(move || Arc::new(machine::overview(a.state::<AppState>().machine.as_ref(), &rules)))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Ok(mut c) = st.overview.lock() {
+        *c = Some(o.clone());
+    }
+    Ok(o)
+}
+
+/// "Sửa giúp tôi" on a health item: one journal group, undoable from the history.
+#[tauri::command]
+async fn fix_health(app: AppHandle, fix: machine::FixId) -> Result<genra_av_machine::repair::RunReport, String> {
+    let a = app.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || a.state::<AppState>().machine.fix_health(fix)).await.map_err(|e| e.to_string())??;
+    let st = app.state::<AppState>();
+    if report.outcome == genra_av_machine::repair::Outcome::Done && report.steps.iter().any(|s| s.state == genra_av_machine::repair::StepState::Done) {
+        st.record(Entry {
+            id: util::new_id(),
+            at: util::now(),
+            kind: Kind::Fix,
+            name: String::new(),
+            path: None,
+            verdict: None,
+            family: serde_json::to_value(fix).ok().and_then(|v| v.as_str().map(String::from)),
+            files: None,
+            hits: None,
+            undo: Some(Undo::Group { id: report.group_id.clone() }),
+            undone: false,
+        });
+    }
+    st.invalidate_overview();
+    Ok(report)
+}
+
+/// "Tắt" on a startup item this user owns: a one-step plan, undoable.
+#[tauri::command]
+async fn disable_startup(app: AppHandle, id: String) -> Result<genra_av_machine::repair::RunReport, String> {
+    let st = app.state::<AppState>();
+    let rules = st.rules();
+    let a = app.clone();
+    let (report, name) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
+        let st = a.state::<AppState>();
+        let item = st.machine.startup(&rules).into_iter().find(|i| i.id == id).ok_or("startup item not found")?;
+        if !machine::can_disable(&item) {
+            return Err("this item is not one Genra switches off".into());
+        }
+        Ok((st.machine.disable_startup(&item)?, item.name))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if report.outcome == genra_av_machine::repair::Outcome::Done {
+        st.record(Entry {
+            id: util::new_id(),
+            at: util::now(),
+            kind: Kind::StartupOff,
+            name,
+            path: None,
+            verdict: None,
+            family: None,
+            files: None,
+            hits: None,
+            undo: Some(Undo::Group { id: report.group_id.clone() }),
+            undone: false,
+        });
+    }
+    st.invalidate_overview();
+    Ok(report)
+}
+
+/// The install id shown in Cài đặt: the same random id sent with reports, so a user can ask for
+/// what Genra received from this install to be deleted.
+#[tauri::command]
+fn get_install_id(st: St) -> Result<String, String> {
+    install_id(&st.data)
 }
 
 #[tauri::command]
@@ -515,6 +688,9 @@ pub fn run() {
             if let Ok(q) = repair::quarantine(&data) {
                 let _ = q.purge_expired();
             }
+            if let Ok(j) = genra_av_machine::Journal::open(&data) {
+                let _ = j.purge_expired();
+            }
             let state = AppState {
                 rules: RwLock::new(Arc::new(packs::load(&data))),
                 status: Mutex::new(packs::read_status(&data)),
@@ -522,7 +698,9 @@ pub fn run() {
                 history: Mutex::new(History::load(&data)),
                 settings: Mutex::new(Settings::load(&data)),
                 quick_running: AtomicBool::new(false),
-                machine: Box::new(machine::Unavailable),
+                machine: Box::new(machine::Real::new(&data)),
+                pending: Mutex::new(HashMap::new()),
+                overview: Mutex::new(None),
                 data,
             };
             app.manage(state);
@@ -554,6 +732,9 @@ pub fn run() {
             pick_file,
             scan_file,
             repair_file,
+            continue_repair,
+            excel_status,
+            close_excel,
             quarantine_file,
             undo,
             history,
@@ -561,6 +742,9 @@ pub fn run() {
             reveal,
             open_link,
             machine_overview,
+            fix_health,
+            disable_startup,
+            get_install_id,
             get_settings,
             set_send_hashes,
             report_false_positive

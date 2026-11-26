@@ -14,7 +14,12 @@ pub enum Kind {
     Check,
     QuickScan,
     Quarantine,
+    /// "Dọn sạch giúp tôi": the file, Excel's startup folder and other infected files.
     Repair,
+    /// "Sửa giúp tôi" on a health item; `family` holds the fix id.
+    Fix,
+    /// "Tắt" on a startup item; `name` is the item.
+    StartupOff,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,8 +27,8 @@ pub enum Kind {
 pub enum Undo {
     /// Put a quarantined file back (`quarantine::Quarantine::restore`).
     Quarantine { id: String },
-    /// Undo a file repair (`repair::undo`).
-    Repair { id: String },
+    /// Undo a whole journal group (a repair, a fix, a startup item switched off).
+    Group { id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

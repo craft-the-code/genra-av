@@ -313,3 +313,29 @@ legend { font-size: 17px; line-height: 24px; font-weight: 700; padding: 0; margi
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation-duration: 0s !important; }
 }
+
+/* Repair: Excel must close (mock 4) */
+.excel-mark { width: 64px; height: 64px; display: grid; place-items: center; color: #1d6f42; }
+.result-head p + p { margin-top: 2px; }
+.ok-tell { color: var(--text); }
+.ok-tell .icon { width: 20px; height: 20px; flex: none; }
+
+/* Máy của bạn (mock 6) */
+.attention { display: grid; grid-template-columns: 28px 1fr auto; gap: 14px; align-items: center; }
+.attention > .icon { width: 28px; height: 28px; }
+.attention-title { font-size: 15px; line-height: 20px; }
+.attention p { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
+.row.startup { align-items: start; }
+.row.startup > .icon { margin-top: 2px; }
+.loc { font-weight: 400; font-size: 12px; }
+.cmd { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skel { display: block; background: var(--surface-2); border-radius: 6px; animation: pulse 1.2s ease-in-out infinite; }
+.skel.dot { width: 22px; height: 22px; border-radius: 50%; }
+.skel.bar { height: 12px; width: 60%; }
+.skel.bar.short { width: 35%; margin-top: 6px; }
+@keyframes pulse { 50% { opacity: .5; } }
+
+/* Cài đặt: install id */
+.install-id { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.install-id code { display: block; margin: 2px 0; user-select: all; overflow-wrap: anywhere; }
+.btn.with-icon { display: inline-flex; align-items: center; gap: 8px; justify-content: center; }
