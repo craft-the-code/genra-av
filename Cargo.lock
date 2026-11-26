@@ -1530,6 +1530,7 @@ dependencies = [
  "anyhow",
  "ed25519-dalek",
  "genra-av-core",
+ "genra-av-machine",
  "hex",
  "reqwest 0.12.28",
  "serde",

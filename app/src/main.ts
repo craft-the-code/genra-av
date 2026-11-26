@@ -4,7 +4,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "./api";
-import type { Failure, QuickResult, RepairDone, ScanResult, Severity, Undo } from "./api";
+import type { Failure, QuickResult, RepairDone, RepairNeedsExcel, RepairNotDone, RepairView, ScanResult, Severity, Undo } from "./api";
 import { icon, line, mark, trigramPattern, type Tone } from "./icons";
 import { t, setLang, getLang, type Lang } from "./i18n";
 
@@ -20,6 +20,9 @@ type Act =
   | { s: "working"; what: "clean" | "quarantine" }
   | { s: "refused"; f: Failure }
   | { s: "failed"; f: Failure }
+  /** Mock 4: nothing changed yet, Excel must close; Genra polls and carries on by itself. */
+  | { s: "excel"; v: RepairNeedsExcel; path: string; asked: "none" | "genra" | "self"; continuing: boolean; error: string }
+  | { s: "not_done"; v: RepairNotDone }
   | { s: "repaired"; done: RepairDone; undoing: boolean; error: string }
   | { s: "quarantined"; q: api.Quarantined };
 type ReportState = { open: boolean; note: string; status: "idle" | "sending" | "done" | "error"; error: string };
@@ -57,6 +60,15 @@ const state = {
   history: null as api.HistoryView | null,
   historyAll: false,
   machine: null as api.MachineOverview | null,
+  machineLoading: false,
+  machineError: "",
+  /** The health fix or startup item being changed right now. */
+  machineBusy: "",
+  machineNotice: null as { tone: Tone; text: string; undo?: Undo } | null,
+  startupAll: false,
+  repairProgress: null as api.RepairProgress | null,
+  installId: "",
+  copied: false,
   notice: null as Notice,
   dragOver: false,
 };
@@ -111,6 +123,9 @@ function shortFolder(p: string): string {
 }
 
 const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+
+/** The English text when the window is in English and it exists, else the Vietnamese one. */
+const tr = (vi: string, en?: string | null) => (getLang() === "en" && en ? en : vi);
 
 const tone = (r: ScanResult): Tone => {
   const v = r.report.verdict;
@@ -284,6 +299,26 @@ function historyRows(): Row[] {
           undoLabel: t("history.undo"),
           undone: e.undone,
         };
+      case "fix":
+        return {
+          at: e.at,
+          tone: e.undone ? "soon" : "ok",
+          name: fixName(e.family ?? ""),
+          sub: [t("history.fixed"), when].join(" · "),
+          undo: e.can_undo ? e.undo : undefined,
+          undoLabel: t("history.undo"),
+          undone: e.undone,
+        };
+      case "startup_off":
+        return {
+          at: e.at,
+          tone: e.undone ? "soon" : "ok",
+          name: e.name,
+          sub: [t("history.startup_off"), when].join(" · "),
+          undo: e.can_undo ? e.undo : undefined,
+          undoLabel: t("history.undo"),
+          undone: e.undone,
+        };
       case "quarantine":
         return {
           at: e.at,
@@ -324,6 +359,12 @@ function historyRows(): Row[] {
       undoLabel: t("history.restore"),
     });
   return rows.sort((a, b) => b.at - a.at);
+}
+
+function fixName(id: string): string {
+  const key = `fix.${id}`;
+  const s = t(key);
+  return s === key ? id : s;
 }
 
 function historyCard(): string {
@@ -408,7 +449,16 @@ function detailsPanel(r: ScanResult): string {
   const modules = rep.vba_modules.length
     ? rep.vba_modules.map((m) => `${esc(m.name)} (${fmtSize(m.bytes)})`).join(", ")
     : esc(t("details.modules.none"));
-  const extra = state.act.s === "refused" || state.act.s === "failed" ? `<dt>Genra</dt><dd class="mono">${esc(state.act.f.detail)}</dd>` : "";
+  const act = state.act;
+  const extra =
+    act.s === "refused" || act.s === "failed"
+      ? `<dt>Genra</dt><dd class="mono">${esc(act.f.detail)}</dd>`
+      : act.s === "not_done"
+        ? act.v.report.steps
+            .filter((x) => x.error)
+            .map((x) => `<dt>Genra</dt><dd class="mono">${esc(tr(x.title_vi, x.title_en))}: ${esc(x.error ?? "")}</dd>`)
+            .join("")
+        : "";
   return `<section class="card inset" id="details" aria-labelledby="details-title">
     <h3 class="overline" id="details-title">${esc(t("details.title"))}</h3>
     <dl class="details">
@@ -453,7 +503,7 @@ function threatBullets(r: ScanResult): string[] {
   const plain = [1, 2, 3].map((i) => `result.does.${fam}.${i}`).filter((k) => t(k) !== k);
   if (!r.hash_only && r.report.verdict === "malware" && plain.length) return plain.map((k) => t(k));
   if (r.hash_only) return [t("result.hash.text")];
-  return [...new Set(r.report.findings.filter((f) => f.severity !== "info").map((f) => f.message_vi))];
+  return [...new Set(r.report.findings.filter((f) => f.severity !== "info").map((f) => tr(f.message_vi, f.message_en)))];
 }
 
 function threatResult(r: ScanResult): string {
@@ -465,10 +515,15 @@ function threatResult(r: ScanResult): string {
     `<li>${line("chevron-right", 14)}<span>${esc(txt)}${soon ? ` <span class="soon-tag">${esc(t("soon"))}</span>` : ""}</span></li>`;
   const plan = quarantineOnly
     ? step(t("result.plan.quarantine"))
-    : step(t("result.plan.replace")) + step(t("result.plan.machine"), state.machine?.health == null) + step(t("result.plan.verify"));
+    : step(t("result.plan.replace")) + step(t("result.plan.machine")) + step(t("result.plan.verify"));
   let status = "";
+  if (working && a.what === "clean") status = progressBlock();
   if (a.s === "refused")
     status = `<div class="card inset warn-inset" role="alert"><h3>${esc(t("refused.title"))}</h3><p>${esc(t(`refused.${a.f.code}`))}</p><p class="muted">${esc(t("refused.kept"))}</p></div>`;
+  else if (a.s === "not_done")
+    status = `<div class="card inset warn-inset" role="alert"><h3>${esc(tr(a.v.report.title_vi, a.v.report.title_en))}</h3><p>${esc(
+      tr(a.v.report.detail_vi, a.v.report.detail_en),
+    )}</p></div>`;
   else if (a.s === "failed")
     status = `<div class="notice warn" role="alert">${icon("warn")}<span><strong>${esc(t("failed.title"))}.</strong> ${esc(
       a.f.code === "not_allowed" ? t("scan.error.not_allowed") : t("failed.text", { detail: a.f.detail }),
@@ -509,11 +564,20 @@ function threatResult(r: ScanResult): string {
   </section>`;
 }
 
-function removedWords(d: RepairDone): string {
-  return d.removed.some((x) => x.toLowerCase().includes("vba") || x.toLowerCase().includes("macro") || x.toLowerCase().includes("module"))
+function progressBlock(): string {
+  const p = state.repairProgress;
+  const text =
+    p?.phase === "step" && p.step
+      ? t("repair.step", { n: p.step.index + 1, total: p.step.total, title: tr(p.step.title_vi, p.step.title_en) })
+      : t("repair.planning");
+  return `<div class="card inset plan" role="status"><div class="notice"><div class="spinner" aria-hidden="true"></div><span>${esc(text)}</span></div></div>`;
+}
+
+function removedWords(removed: string[]): string {
+  return removed.some((x) => x.toLowerCase().includes("vba") || x.toLowerCase().includes("macro") || x.toLowerCase().includes("module"))
     ? t("done.macros")
-    : d.removed.length
-      ? d.removed.join(", ")
+    : removed.length
+      ? removed.join(", ")
       : t("done.macros");
 }
 
@@ -521,27 +585,61 @@ function doneResult(a: Extract<Act, { s: "repaired" }>): string {
   const d = a.done;
   const item = (tn: Tone, title: string, detail: string) =>
     `<li>${icon(tn)}<div><div class="step-title">${esc(title)}</div><div class="row-sub">${esc(detail)}</div></div></li>`;
-  const cleanDetail = d.renamed
-    ? t("done.clean.renamed", { removed: removedWords(d), clean: d.clean_name })
-    : t("done.clean.inplace", { removed: removedWords(d) });
+  const items: string[] = [];
+  if (d.xlstart.length) items.push(item("ok", t("done.xlstart"), t("done.xlstart.detail", { names: d.xlstart.join(", ") })));
+  if (d.cleaned.length === 1) {
+    const c = d.cleaned[0];
+    items.push(
+      item(
+        "ok",
+        t("done.clean", { name: c.name }),
+        c.renamed ? t("done.clean.renamed", { removed: removedWords(c.removed), clean: c.clean_name }) : t("done.clean.inplace", { removed: removedWords(c.removed) }),
+      ),
+    );
+  } else if (d.cleaned.length > 1) {
+    items.push(item("ok", t("done.clean.many", { n: d.cleaned.length }), t("done.clean.many.detail", { name: d.cleaned[0].name, more: d.cleaned.length - 1 })));
+  }
+  items.push(item("ok", t("done.quarantine"), t("done.quarantine.detail")));
+  if (d.verified) items.push(item("ok", t("done.verify"), t("done.verify.detail")));
+  const machine = d.xlstart.length > 0;
+  const first = d.cleaned[0];
   return `<section class="card hero result" aria-labelledby="res-title">
     ${icon("ok")}
     <div class="result-body">
       <div class="result-head">
-        <h2 id="res-title">${esc(t("done.title"))}</h2>
-        <p>${esc(t("done.text"))}</p>
+        <h2 id="res-title">${esc(t(machine ? "done.title.machine" : "done.title"))}</h2>
+        <p>${esc(t(machine ? "done.text.machine" : "done.text"))}</p>
       </div>
-      <ul class="done-steps">
-        ${item("ok", t("done.clean", { name: d.name }), cleanDetail)}
-        ${item("ok", t("done.quarantine"), t("done.quarantine.detail"))}
-        ${item("ok", t("done.verify"), t("done.verify.detail"))}
-        ${d.machine ? "" : item("soon", t("done.machine"), t("done.machine.soon"))}
-      </ul>
+      <ul class="done-steps" data-fid="done-steps">${items.join("")}</ul>
       <div class="card inset tell">${line("message-square")}<span>${esc(t("done.tell"))}</span></div>
       ${a.error ? `<div class="notice warn" role="alert">${icon("warn")}<span>${esc(a.error)}</span></div>` : ""}
       <div class="actions">
-        <button class="btn primary" data-action="reveal" data-path="${esc(d.clean_path)}" data-fid="reveal-clean">${esc(t("result.reveal"))}</button>
+        ${first ? `<button class="btn primary" data-action="reveal" data-path="${esc(first.clean_path)}" data-fid="reveal-clean">${esc(t("result.reveal"))}</button>` : ""}
         <button class="link with-icon" data-action="undo-repair" data-fid="undo-repair"${a.undoing ? " disabled" : ""}>${line("undo-2", 18)}${esc(t("done.undo"))}</button>
+      </div>
+    </div>
+  </section>`;
+}
+
+/** Mock 4: Excel holds what the repair must change. Nothing has changed yet. */
+function excelResult(a: Extract<Act, { s: "excel" }>): string {
+  const docs = a.v.open_documents;
+  const lines = [
+    docs.length ? t("excel.open", { n: docs.length, names: docs.join(", ") }) : t("excel.running"),
+    t("excel.ask"),
+    t("excel.never"),
+  ];
+  const waiting = a.continuing ? t("excel.continuing") : a.asked === "genra" ? t("excel.asked") : a.asked === "self" ? t("excel.self") : "";
+  return `<section class="card hero result" aria-labelledby="res-title">
+    <span class="excel-mark">${line("file-spreadsheet", 40)}</span>
+    <div class="result-body">
+      <div class="result-head"><h2 id="res-title">${esc(t("excel.title"))}</h2>${lines.map((x) => `<p>${esc(x)}</p>`).join("")}</div>
+      <div class="card inset tell ok-tell">${icon("ok")}<span>${esc(t("excel.promise"))}</span></div>
+      ${a.continuing ? progressBlock() : waiting ? `<div class="notice" role="status"><div class="spinner" aria-hidden="true"></div><span>${esc(waiting)}</span></div>` : ""}
+      ${a.error ? `<div class="notice warn" role="alert">${icon("warn")}<span>${esc(a.error)}</span></div>` : ""}
+      <div class="actions">
+        <button class="btn primary" data-action="close-excel" data-fid="close-excel"${a.asked === "genra" || a.continuing ? " disabled" : ""}>${esc(t("excel.close"))}</button>
+        <button class="btn" data-action="excel-self" data-fid="excel-self"${a.asked !== "none" || a.continuing ? " disabled" : ""}>${esc(t("excel.later"))}</button>
       </div>
     </div>
   </section>`;
@@ -568,6 +666,9 @@ function scanPage(): string {
   if (a.s === "repaired") {
     body = doneResult(a);
     showDrop = false;
+  } else if (a.s === "excel") {
+    body = excelResult(a);
+    showDrop = false;
   } else if (a.s === "quarantined") {
     body = quarantinedResult(a.q);
     showDrop = false;
@@ -593,37 +694,117 @@ function scanPage(): string {
     <div class="stack">${showDrop ? dropZone() : ""}<div role="status" aria-live="polite">${body}</div></div>`;
 }
 
-// ---------- Máy của bạn
+// ---------- Máy của bạn (mock 6)
+
+const healthTone = (st: api.HealthStatus): Tone => (st === "unknown" ? "soon" : st);
+const verdictToneOf = (v: api.StartupItem["verdict"]): Tone => (v === "unknown" ? "soon" : v);
+/** Health items that need the user and have a one-press fix: shown first, as in mock 6. */
+const attention = (m: api.MachineOverview) => m.health.filter((h) => h.fix && (h.status === "warn" || h.status === "bad"));
+
+function skeletonRows(n: number): string {
+  return Array.from({ length: n }, () => `<li class="row skel-row" aria-hidden="true"><span class="skel dot"></span><div class="row-text"><span class="skel bar"></span><span class="skel bar short"></span></div><span></span></li>`).join("");
+}
+
+function startupRow(s: api.StartupItem, i: number): string {
+  const who = [s.publisher, s.signed === true ? t("machine.signed") : s.signed === false ? t("machine.unsigned") : ""].filter(Boolean).join(" · ");
+  const busy = state.machineBusy === s.id;
+  const off = s.can_disable
+    ? `<button class="link" data-action="startup-off" data-id="${esc(s.id)}" data-fid="startup-off-${i}"${busy || state.machineBusy ? " disabled" : ""}>${esc(busy ? t("machine.off.busy") : t("machine.off"))}<span class="sr-only"> ${esc(s.name)}</span></button>`
+    : "";
+  return `<li class="row startup">${icon(verdictToneOf(s.verdict))}<div class="row-text">
+      <div class="row-name">${esc(s.name)} <span class="muted loc" title="${esc(s.location)}">(${esc(shortFolder(s.location))})</span></div>
+      <div class="row-sub">${esc([who, tr(s.reason_vi, s.reason_en)].filter(Boolean).join(" · "))}</div>
+      <div class="row-sub mono cmd" title="${esc(s.command)}">${esc(s.command)}</div>
+    </div>${off}</li>`;
+}
 
 function machinePage(): string {
   const m = state.machine;
   const r = state.rules;
   const row = (tn: Tone, name: string, detail: string, right = "") =>
     `<li class="row">${icon(tn)}<div class="row-text"><div class="row-name">${esc(name)}</div><div class="row-sub">${esc(detail)}</div></div>${right}</li>`;
-  const soon = `<span class="status-word soon">${esc(t("status.soon"))}</span>`;
   const rulesDetail = r
     ? r.source === "installed"
       ? t("machine.rules.installed", { version: r.version, hashes: nf(r.hashes), when: r.last_ok ? relTime(r.last_ok) : "—" })
       : t("machine.rules.bundled", { version: r.version })
     : "";
-  const health = m?.health
-    ? m.health.map((h) => row(h.tone, h.title_vi, h.detail_vi)).join("")
-    : row("soon", t("machine.defender"), t("machine.defender.detail"), soon) + row("soon", t("machine.macro"), t("machine.macro.detail"), soon);
-  const startup = m?.startup
-    ? m.startup.length
-      ? `<ul class="rows">${m.startup.map((s) => row(s.tone, s.name, [s.publisher, s.detail_vi].filter(Boolean).join(" · "))).join("")}</ul>`
-      : `<p class="empty">${esc(t("machine.startup.empty"))}</p>`
-    : `<div class="soon-block">${soon}<p>${esc(t("machine.startup.soon"))}</p></div>`;
-  const guard = (ic: string, name: string) =>
-    `<li class="row">${line(ic, 18)}<div class="row-text"><div class="row-name">${esc(name)}</div><div class="row-sub">${esc(t("machine.guard.detail"))}</div></div>${soon}</li>`;
+  const loading = !m && (state.machineLoading || !state.machineError);
+  const todo = m ? attention(m).length + m.startup.filter((s) => s.can_disable).length : 0;
+  const sub = loading ? t("machine.loading") : m ? (todo ? t("machine.sub.todo", { n: todo }) : t("machine.sub.ok")) : t("machine.error", { detail: state.machineError });
+
+  const cards = m
+    ? attention(m)
+        .map((h) => {
+          const busy = state.machineBusy === h.fix;
+          return `<section class="card warning attention" aria-labelledby="fix-${esc(h.id)}">${icon(healthTone(h.status))}
+          <div class="row-text"><h2 class="attention-title" id="fix-${esc(h.id)}">${esc(tr(h.title_vi, h.title_en))}</h2><p>${esc(tr(h.detail_vi, h.detail_en))}</p></div>
+          <button class="btn primary" data-action="fix" data-fix="${esc(h.fix ?? "")}" data-fid="fix-${esc(h.id)}"${state.machineBusy ? " disabled" : ""}>${esc(busy ? t("machine.fix.busy") : t("machine.fix"))}</button></section>`;
+        })
+        .join("")
+    : "";
+  const health = m
+    ? m.health
+        .filter((h) => !attention(m).includes(h))
+        .map((h) => row(healthTone(h.status), tr(h.title_vi, h.title_en), tr(h.detail_vi, h.detail_en)))
+        .join("")
+    : loading
+      ? skeletonRows(3)
+      : "";
+
+  let startup = "";
+  if (m) {
+    const items = m.startup;
+    const needs = items.filter((s) => s.verdict !== "ok");
+    const fine = items.filter((s) => s.verdict === "ok");
+    const shown = state.startupAll ? items : needs;
+    const list = shown.map((s, i) => startupRow(s, i)).join("");
+    const more = fine.length
+      ? `<button class="link quiet" data-action="startup-all" data-fid="startup-all">${esc(state.startupAll ? t("machine.startup.less") : t("machine.startup.more", { n: fine.length }))}</button>`
+      : "";
+    startup = items.length
+      ? `${list ? `<ul class="rows">${list}</ul>` : `<p class="empty">${esc(t("machine.startup.fine", { n: fine.length }))}</p>`}${more}`
+      : `<p class="empty">${esc(t("machine.startup.empty"))}</p>`;
+  } else if (loading) startup = `<ul class="rows">${skeletonRows(3)}</ul>`;
+
+  const guardIcon: Record<api.GuardPlace["kind"], string> = { downloads: "folder", zalo: "message-square", usb: "hard-drive" };
+  const places: api.GuardPlace[] = m?.guard ?? [
+    { kind: "downloads", paths: [] },
+    { kind: "zalo", paths: [] },
+    { kind: "usb", paths: [] },
+  ];
+  const guard = places
+    .map((g) => {
+      const where = g.kind === "usb"
+        ? g.paths.length
+          ? t("machine.guard.usb.now", { names: g.paths.map(baseName).join(", ") })
+          : t("machine.guard.usb.none")
+        : g.paths.length
+          ? shortFolder(g.paths[0])
+          : m
+            ? t("machine.guard.missing")
+            : "";
+      return `<li class="row">${line(guardIcon[g.kind], 18)}<div class="row-text"><div class="row-name">${esc(t(`machine.guard.${g.kind}`))}</div><div class="row-sub">${esc(
+        [t("machine.guard.detail"), where].filter(Boolean).join(" · "),
+      )}</div></div><span class="status-word soon">${esc(t("machine.guard.soon"))}</span></li>`;
+    })
+    .join("");
+
+  const n = state.machineNotice;
+  const notice = n
+    ? `<div class="notice ${n.tone}" role="status">${icon(n.tone)}<span>${esc(n.text)}</span>${
+        n.undo ? `<button class="link with-icon" data-action="undo" data-type="${n.undo.type}" data-id="${esc(n.undo.id)}" data-fid="machine-undo">${line("undo-2", 16)}${esc(t("history.undo"))}</button>` : ""
+      }</div>`
+    : "";
   return `<h1 tabindex="-1">${esc(t("machine.title"))}</h1>
-    <p class="page-sub">${esc(t("machine.sub"))}</p>
+    <p class="page-sub" aria-live="polite">${esc(sub)}</p>
+    ${notice}
     <div class="stack">
-      <section class="card" aria-labelledby="m-health"><h2 class="overline" id="m-health">${esc(t("machine.health"))}</h2>
+      ${cards}
+      <section class="card" aria-labelledby="m-health" aria-busy="${loading}"><h2 class="overline" id="m-health">${esc(t("machine.health"))}</h2>
         <ul class="rows">${row(r?.source === "installed" ? "ok" : "warn", t("machine.rules"), rulesDetail)}${health}</ul></section>
-      <section class="card" aria-labelledby="m-startup"><h2 class="overline" id="m-startup">${esc(t("machine.startup"))}</h2>${startup}</section>
+      <section class="card" aria-labelledby="m-startup" aria-busy="${loading}"><h2 class="overline" id="m-startup">${esc(t("machine.startup"))}</h2>${startup}</section>
       <section class="card" aria-labelledby="m-guard"><h2 class="overline" id="m-guard">${esc(t("machine.guard"))}</h2>
-        <ul class="rows">${guard("folder", t("machine.guard.downloads"))}${guard("message-square", t("machine.guard.zalo"))}${guard("hard-drive", t("machine.guard.usb"))}</ul></section>
+        <ul class="rows">${guard}</ul></section>
     </div>`;
 }
 
@@ -650,6 +831,14 @@ function settingsPage(): string {
         <label class="toggle"><input type="checkbox" name="send_hashes" data-fid="send-hashes"${state.settings.send_hashes ? " checked" : ""}>
           <span class="switch" aria-hidden="true"></span>
           <span><span class="toggle-title">${esc(t("settings.send_hashes"))}</span><span class="row-sub">${esc(t("settings.send_hashes.text"))}</span></span></label>
+        <div class="install-id">
+          <div class="row-text"><span class="toggle-title" id="install-id-label">${esc(t("settings.install_id"))}</span>
+            <code class="mono" aria-labelledby="install-id-label" data-fid="install-id">${esc(state.installId || "—")}</code>
+            <span class="row-sub">${esc(t("settings.install_id.text"))}</span></div>
+          <button class="btn with-icon" data-action="copy-id" data-fid="copy-id"${state.installId ? "" : " disabled"}>${line("copy", 16)}${esc(
+            state.copied ? t("settings.install_id.copied") : t("settings.install_id.copy"),
+          )}</button>
+        </div>
       </section>
       <section class="card"><h3>${esc(t("settings.rules"))}</h3>
         ${
@@ -713,6 +902,10 @@ function go(p: Page) {
     state.scan = { status: "idle" };
   }
   if (p === "overview") void refreshHistory();
+  if (p === "machine") {
+    state.machineNotice = null;
+    if (!state.machine && !state.machineLoading) void loadMachine(false);
+  }
   render(true);
 }
 
@@ -786,21 +979,143 @@ async function pick() {
   }
 }
 
+/** Paths a finished repair dealt with, so the band stops listing them. */
+function markHandled(v: RepairDone, path: string) {
+  state.quick.handled.add(path);
+  for (const c of v.cleaned) state.quick.handled.add(c.original_path);
+}
+
+function applyRepairView(v: RepairView, path: string) {
+  state.repairProgress = null;
+  if (v.state === "done") {
+    state.act = { s: "repaired", done: v, undoing: false, error: "" };
+    markHandled(v, path);
+    state.machine = null;
+  } else if (v.state === "needs_excel") {
+    const prev = state.act.s === "excel" && state.act.v.group_id === v.group_id ? state.act : null;
+    state.act = { s: "excel", v, path, asked: prev?.asked ?? "none", continuing: false, error: "" };
+    watchExcel();
+  } else state.act = { s: "not_done", v };
+}
+
 async function clean() {
   const s = state.scan;
   if (s.status !== "done") return;
+  const path = s.result.path;
   state.act = { s: "working", what: "clean" };
+  state.repairProgress = null;
   render();
   try {
-    const done = await api.repairFile(s.result.path);
-    state.act = { s: "repaired", done, undoing: false, error: "" };
-    state.quick.handled.add(s.result.path);
+    applyRepairView(await api.repairFile(path), path);
   } catch (e) {
     const f = failureCode(e);
     state.act = f.kind === "refused" ? { s: "refused", f } : { s: "failed", f };
   }
   render(true);
   void refreshHistory();
+}
+
+// While a repair waits for Excel: look every second, carry on by itself once Excel is gone (J2).
+let excelTimer: number | undefined;
+function watchExcel() {
+  window.clearInterval(excelTimer);
+  excelTimer = window.setInterval(() => void tickExcel(), 1000);
+}
+
+async function tickExcel() {
+  const a = state.act;
+  if (a.s !== "excel") {
+    window.clearInterval(excelTimer);
+    return;
+  }
+  if (a.continuing) return;
+  let st: api.ExcelStatus;
+  try {
+    st = await api.excelStatus();
+  } catch {
+    return;
+  }
+  if (state.act !== a || st.running) return;
+  window.clearInterval(excelTimer);
+  a.continuing = true;
+  render();
+  try {
+    applyRepairView(await api.continueRepair(a.v.group_id), a.path);
+  } catch (e) {
+    state.act = { s: "failed", f: failureCode(e) };
+  }
+  render(true);
+  void refreshHistory();
+}
+
+async function closeExcel() {
+  const a = state.act;
+  if (a.s !== "excel") return;
+  a.asked = "genra";
+  a.error = "";
+  render();
+  try {
+    await api.closeExcel();
+  } catch (e) {
+    a.error = t("excel.failed", { detail: String(e) });
+    a.asked = "self";
+    render();
+  }
+}
+
+async function loadMachine(refresh: boolean) {
+  state.machineLoading = true;
+  state.machineError = "";
+  if (state.page === "machine") render();
+  try {
+    state.machine = await api.machineOverview(refresh);
+  } catch (e) {
+    state.machineError = String(e);
+  }
+  state.machineLoading = false;
+  if (state.page === "machine") render();
+}
+
+/** "Sửa giúp tôi" and "Tắt" share this: run, say what happened with its undo, read the machine again. */
+async function machineChange(busy: string, run: () => Promise<api.RunReport>, done: string) {
+  state.machineBusy = busy;
+  state.machineNotice = null;
+  render();
+  try {
+    const r = await run();
+    const ok = r.outcome.type === "done";
+    const changed = r.steps.some((x) => x.state === "done");
+    state.machineNotice = ok
+      ? { tone: "ok", text: changed ? done : tr(r.steps[0]?.detail_vi ?? r.detail_vi, r.steps[0]?.detail_en ?? r.detail_en), undo: changed ? { type: "group", id: r.group_id } : undefined }
+      : { tone: "warn", text: tr(r.detail_vi, r.detail_en) };
+  } catch (e) {
+    state.machineNotice = { tone: "warn", text: t("machine.change.failed", { detail: String(e) }) };
+  }
+  state.machineBusy = "";
+  state.machine = null;
+  void refreshHistory();
+  await loadMachine(true);
+}
+
+async function copyInstallId() {
+  const id = state.installId;
+  if (!id) return;
+  try {
+    await navigator.clipboard.writeText(id);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = id;
+    document.body.append(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  state.copied = true;
+  render();
+  setTimeout(() => {
+    state.copied = false;
+    render();
+  }, 2000);
 }
 
 async function quarantine() {
@@ -826,6 +1141,11 @@ async function doUndo(u: Undo) {
     if (state.page === "scan") {
       state.act = { s: "idle" };
       state.scan = { status: "idle" };
+    }
+    if (state.page === "machine") {
+      state.machineNotice = { tone: "ok", text: t("done.undone.machine") };
+      state.machine = null;
+      void loadMachine(true);
     }
   } catch (e) {
     const f = failureCode(e);
@@ -896,14 +1216,41 @@ root.addEventListener("click", (ev) => {
       if (state.act.s === "repaired") {
         state.act.undoing = true;
         render();
-        void doUndo({ type: "repair", id: state.act.done.id });
+        void doUndo({ type: "group", id: state.act.done.group_id });
       }
       break;
     case "undo":
-      void doUndo({ type: el.dataset.type as "quarantine" | "repair", id: el.dataset.id ?? "" } as Undo);
+      void doUndo({ type: el.dataset.type as "quarantine" | "group", id: el.dataset.id ?? "" } as Undo);
       break;
     case "quick":
       void startQuick();
+      break;
+    case "close-excel":
+      void closeExcel();
+      break;
+    case "excel-self":
+      if (state.act.s === "excel") {
+        state.act.asked = "self";
+        render();
+      }
+      break;
+    case "fix": {
+      const fix = el.dataset.fix ?? "";
+      void machineChange(fix, () => api.fixHealth(fix), t("machine.fix.done"));
+      break;
+    }
+    case "startup-off": {
+      const id = el.dataset.id ?? "";
+      const item = state.machine?.startup.find((x) => x.id === id);
+      void machineChange(id, () => api.disableStartup(id), t("machine.off.done", { name: item?.name ?? "" }));
+      break;
+    }
+    case "startup-all":
+      state.startupAll = !state.startupAll;
+      render();
+      break;
+    case "copy-id":
+      void copyInstallId();
       break;
     case "band-clean": {
       const first = remainingHits()[0];
@@ -990,20 +1337,24 @@ async function start() {
     void refreshHistory();
   });
   await api.onRulesChanged(() => void refreshRules());
+  await api.onRepairProgress((p) => {
+    state.repairProgress = p;
+    if (state.page === "scan" && (state.act.s === "working" || state.act.s === "excel")) render();
+  });
   await api.onDropped((paths) => {
     state.dragOver = false;
     if (paths.length) void scanPath(paths[0]);
     else render();
   });
 
-  const [rules, version, settings, hist, machine] = await Promise.all([
+  const [rules, version, settings, hist, installId] = await Promise.all([
     api.rulesInfo(),
     getVersion(),
     api.getSettings(),
     api.history(),
-    api.machineOverview(),
+    api.installId().catch(() => ""),
   ]);
-  Object.assign(state, { rules, appVersion: version, settings, history: hist, machine });
+  Object.assign(state, { rules, appVersion: version, settings, history: hist, installId });
   render();
 
   const launched = await api.launchPath();

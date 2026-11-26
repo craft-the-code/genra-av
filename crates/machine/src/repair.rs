@@ -230,15 +230,24 @@ pub fn plan_for_threat(path: &Path, report: &Report) -> Plan {
 /// The plan for a detected file: replace it with a clean copy; when the threat persists in
 /// Excel's startup folder, also take the infected items out of it and clean the other
 /// workbooks in the quick-scan places that carry the same infection.
+///
+/// A detected file that itself sits in an Excel startup folder is the worm's copy, not a user
+/// document: it is moved out of the folder (quarantine) instead of being cleaned in place.
 pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
-    let mut steps = vec![replace_step(path, &scope.excel)];
-    let mut xlstart = 0;
+    let this = crate::journal::resolved(path);
+    let in_xlstart = |p: &Path| targets::in_startup_folder(p) || p.parent().is_some_and(|d| scope.xlstart_dirs.iter().any(|x| x == d || crate::journal::resolved(x) == crate::journal::resolved(d)));
+    let threat_in_xlstart = in_xlstart(path);
+    let mut steps = vec![if threat_in_xlstart { xlstart_step(path, &scope.excel) } else { replace_step(path, &scope.excel) }];
+    let mut xlstart = usize::from(threat_in_xlstart);
     if persists_in_xlstart(report, scope.pack) {
         for dir in &scope.xlstart_dirs {
             let Ok(rd) = std::fs::read_dir(dir) else { continue };
             let mut files: Vec<PathBuf> = rd.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_file())).map(|e| e.path()).collect();
             files.sort();
             for f in files {
+                if crate::journal::resolved(&f) == this {
+                    continue;
+                }
                 if let Some(r) = scan_path(&f, scope) {
                     if same_infection(report, &r) || r.should_quarantine() {
                         steps.push(xlstart_step(&f, &scope.excel));
@@ -249,7 +258,6 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
         }
         let mut ctx = scanner::Context::new(scope.pack, scope.reputation, scanner::Cache::default());
         let summary = scanner::walk(&mut ctx, &scope.scan_roots, |_| {});
-        let this = crate::journal::resolved(path);
         let mut seen: HashSet<PathBuf> = HashSet::from([this]);
         let mut others: Vec<PathBuf> = summary
             .hits
@@ -267,7 +275,9 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
         }
     }
     let files = steps.iter().filter(|s| matches!(s.action, Action::ReplaceWithClean { .. })).count();
-    let (summary_vi, summary_en) = if xlstart > 0 {
+    let (summary_vi, summary_en) = if xlstart > 0 && files == 0 {
+        ("Gỡ sâu khỏi Excel · không đụng gì khác".to_string(), "Remove the worm from Excel · nothing else is touched".to_string())
+    } else if xlstart > 0 {
         (format!("Gỡ sâu khỏi Excel · làm sạch {files} tệp · không đụng gì khác"), format!("Remove the worm from Excel · clean {files} file(s) · nothing else is touched"))
     } else {
         (format!("Làm sạch {files} tệp · không đụng gì khác"), format!("Clean {files} file(s) · nothing else is touched"))

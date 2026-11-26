@@ -59,3 +59,14 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   Excel status and a polite close request; health (Defender/Gatekeeper, updates, firewall, Office
   macros); startup items with signatures and verdicts. CLI: `genra-av machine health|startup|plan|
   repair|journal|undo`.
+- Desktop app on the machine engine: "Dọn sạch giúp tôi" runs the machine plan (the file, Excel's
+  startup folder, other infected workbooks in the quick-scan places) with step progress; one "Hoàn tác"
+  undoes the whole journal group. When Excel holds what must change, the app shows "Cần đóng Excel
+  trước khi dọn", asks Excel to close on "Đóng Excel giúp tôi", checks every second and carries on by
+  itself once Excel is gone. "Máy của bạn" shows real health and startup items ("Sửa giúp tôi" for the
+  Office macro setting, "Tắt" for this user's suspicious startup items, both undoable) and the places
+  the quick scan covers; read once per session on a background thread. Cài đặt shows the install id
+  used in reports, with a copy button. The app's own file-level repair is gone.
+- Rules carry an optional `message_en` (old packs still load); every rule in `rules/base.json` has one
+  and the built-in heuristics have English text. The app shows it when the window is in English.
+- A detected file that sits in Excel's startup folder is moved out of it, not cleaned in place.

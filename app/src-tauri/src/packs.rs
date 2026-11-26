@@ -19,9 +19,17 @@ pub const MAX_SIG: u64 = 4 * 1024;
 pub const MAX_LIST: u64 = 64 * 1024 * 1024;
 pub const UPDATE_EVERY: Duration = Duration::from_secs(6 * 3600);
 
-/// The pack that ships inside the app, used until a signed pack has been installed.
-// TODO(ADR 0002): sign the bundled pack at release time and load it with `Pack::verified`; until
-// then it is parsed unsigned, like `--unsigned` in the CLI.
+/// The pack that ships inside the app, used only while no signed pack is installed (a fresh
+/// install that has not reached GitHub yet, or every installed pack failing its checks).
+///
+/// It is parsed without a signature on purpose. `rules/base.json` is compiled into the binary,
+/// so it is exactly as trustworthy as the binary itself: anyone able to swap these bytes could
+/// swap the code that checks a signature too. The binary's own signature is what protects it
+/// (macOS: Developer ID + notarisation; Windows: unsigned during the beta, SignPath planned for
+/// v1.0, docs/release-plan.md). Signing it would need the pack key in the app build, which the release job
+/// does not hold (only the `rule-pack` job does, ADR 0002). Downloaded packs are different:
+/// they arrive over the network, so [`load_installed`] verifies their signature, expiry,
+/// version and hash lists on every load, and an installed pack always wins over this one.
 static BUNDLED: &[u8] = include_bytes!("../../../rules/base.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

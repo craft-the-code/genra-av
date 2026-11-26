@@ -404,3 +404,26 @@ fn plans_and_reports_serialise_for_the_app() {
     let back: Plan = serde_json::from_value(v).unwrap();
     assert_eq!(back.steps[1].action, Action::DisableStartupItem { id: "file:/x".into() });
 }
+
+#[test]
+fn a_threat_found_in_xlstart_is_moved_out_not_cleaned_in_place() {
+    let m = machine("inxl");
+    let p = pack();
+    let report = genra_av_core::scan(&std::fs::read(&m.worm_in_xlstart).unwrap(), Some(&p));
+    let plan = plan_for_threat_in(&m.worm_in_xlstart, &report, &scope(&m, &p, ExcelStatus::default()));
+    let actions: Vec<&Action> = plan.steps.iter().map(|s| &s.action).collect();
+    assert_eq!(
+        actions,
+        [
+            &Action::RemoveXlstartItem { path: m.worm_in_xlstart.clone() },
+            &Action::ReplaceWithClean { path: m.other_infected.clone() },
+            &Action::ReplaceWithClean { path: m.threat.clone() },
+        ],
+        "the worm's copy once, then the infected documents (sorted by path)"
+    );
+    let mut j = Journal::open(m.root.join("data")).unwrap();
+    let r = run_in(&plan, &mut j, no_excel, |_| {});
+    assert_eq!(r.outcome, Outcome::Done, "{r:#?}");
+    assert!(!m.worm_in_xlstart.exists());
+    let _ = std::fs::remove_dir_all(&m.root);
+}

@@ -22,6 +22,8 @@ pub struct Finding {
     pub family: String,
     pub severity: Severity,
     pub message_vi: String,
+    /// English, when the rule carries it (`None`: show `message_vi`).
+    pub message_en: Option<String>,
     /// Whether this finding on its own may move the file into quarantine. False for a match on
     /// a public hash feed that is not marked `trusted` (anyone can upload a clean file there).
     pub auto_quarantine: bool,
@@ -77,6 +79,7 @@ pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputati
                     family: rule.family.clone(),
                     severity: rule.severity,
                     message_vi: rule.message_vi.clone(),
+                    message_en: rule.message_en.clone(),
                     auto_quarantine: true,
                 });
             }
@@ -88,6 +91,7 @@ pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputati
             family: hit.family.clone(),
             severity: hit.severity,
             message_vi: format!("Tệp này khớp với mã độc đã biết ({}).", hit.source),
+            message_en: Some(format!("This file matches known malware ({}).", hit.source)),
             auto_quarantine: hit.trusted,
         });
     }
@@ -141,6 +145,7 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
             family: "macro".into(),
             severity: Severity::Suspicious,
             message_vi: "Tệp có macro nhưng không đọc được mã: không nên mở bằng Excel/Word.".into(),
+            message_en: Some("The file has macros whose code cannot be read: do not open it in Excel or Word.".into()),
             auto_quarantine: true,
         });
     }
@@ -150,14 +155,22 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
     let all: String = facts.vba.iter().map(|m| m.source.to_ascii_lowercase()).collect::<Vec<_>>().join("\n");
     let auto = AUTO_EXEC.iter().any(|k| all.contains(k));
     let reach = REACHES_OUT.iter().any(|k| all.contains(k));
-    let (rule, severity, msg) = match (auto, reach) {
+    let (rule, severity, msg, msg_en) = match (auto, reach) {
         (true, true) => (
             "builtin.macro_autoexec_reaches_out",
             Severity::Suspicious,
             "Macro tự chạy khi mở tệp và can thiệp ra ngoài tệp (chép tệp, chạy chương trình…).",
+            "A macro runs when the file opens and reaches outside the file (copies files, runs programs…).",
         ),
-        _ => ("builtin.macro_present", Severity::Info, "Tệp có macro VBA."),
+        _ => ("builtin.macro_present", Severity::Info, "Tệp có macro VBA.", "The file has VBA macros."),
     };
-    out.push(Finding { rule: rule.into(), family: "macro".into(), severity, message_vi: msg.into(), auto_quarantine: true });
+    out.push(Finding {
+        rule: rule.into(),
+        family: "macro".into(),
+        severity,
+        message_vi: msg.into(),
+        message_en: Some(msg_en.into()),
+        auto_quarantine: true,
+    });
     out
 }
