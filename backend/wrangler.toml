@@ -1,7 +1,8 @@
 name = "genra-api"
 main = "src/index.ts"
 compatibility_date = "2025-11-01"
-workers_dev = true
+workers_dev = false
+preview_urls = false
 
 routes = [{ pattern = "genra-api.craftthecode.dev", custom_domain = true }]
 
@@ -11,7 +12,7 @@ RETENTION_DAYS = "90"
 [[d1_databases]]
 binding = "DB"
 database_name = "genra"
-database_id = "00000000-0000-0000-0000-000000000000" # set after `wrangler d1 create genra`
+database_id = "37f7ac61-305b-44dc-8b07-43704704e356"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
