@@ -175,6 +175,10 @@ h3 { font-size: 17px; line-height: 24px; font-weight: 700; margin: 0; }
 .btn.on-dark { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .45); display: inline-flex; align-items: center; gap: 8px; justify-content: center; }
 .btn.on-dark.primary { background: #fff; border-color: #fff; color: var(--brand-800); }
 .btn.on-dark:focus-visible { outline-color: #fff; }
+.band-more { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 20px; }
+.link.on-dark { color: #d7e0f5; font-weight: 500; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.link.on-dark:hover { color: #fff; }
+.link.on-dark:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 /* Cards */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 20px; }

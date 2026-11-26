@@ -39,6 +39,8 @@ struct AppState {
     history: Mutex<History>,
     settings: Mutex<Settings>,
     quick_running: AtomicBool,
+    /// Set by "Dừng"; the running scan stops before its next folder.
+    quick_stop: AtomicBool,
     machine: Box<dyn Machine>,
     /// Plans waiting for Excel to close, by group id; run again as they are.
     pending: Mutex<HashMap<String, Pending>>,
@@ -175,6 +177,7 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
         hits: None,
         undo: None,
         undone: false,
+        stopped: false,
         items: Vec::new(),
     });
     if result.report.verdict.is_some_and(|v| v >= Severity::Suspicious) {
@@ -219,6 +222,7 @@ fn execute(app: &AppHandle, plan: genra_av_machine::repair::Plan, name: String, 
                 hits: None,
                 undo: Some(Undo::Group { id: group_id.clone() }),
                 undone: false,
+                stopped: false,
                 items: Vec::new(),
             });
             st.invalidate_overview();
@@ -310,6 +314,7 @@ async fn quarantine_file(app: AppHandle, path: String) -> Result<Quarantined, re
         hits: None,
         undo: Some(Undo::Quarantine { id: item.id.clone() }),
         undone: false,
+        stopped: false,
         items: Vec::new(),
     });
     Ok(Quarantined { id: item.id, name })
@@ -400,20 +405,86 @@ fn history(st: St) -> Result<HistoryView, String> {
     Ok(HistoryView { entries, other_quarantine })
 }
 
-/// Starts the quick scan on a background thread; progress and the result arrive as events.
+/// What a scan walks: the usual places, every drive, or one folder the user picked.
+enum Scope {
+    Quick,
+    Full,
+    Folder(PathBuf),
+}
+
+/// Starts a scan on a background thread; progress and the result arrive as events.
+/// `scope`: `quick` (default) or `full`.
 #[tauri::command]
-fn quick_scan(app: AppHandle) -> Result<(), String> {
+fn quick_scan(app: AppHandle, scope: Option<String>) -> Result<(), String> {
+    let scope = match scope.as_deref() {
+        None | Some("quick") => Scope::Quick,
+        Some("full") => Scope::Full,
+        Some(_) => return Err("unknown scope".into()),
+    };
+    start_scan(app, scope)
+}
+
+/// "Chọn thư mục để quét": the system folder picker, then a scan of that folder.
+/// Returns false when the user closed the picker.
+#[tauri::command]
+async fn scan_folder(app: AppHandle) -> Result<bool, String> {
+    let a = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || a.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(dir) = picked.and_then(|f| f.into_path().ok()) else { return Ok(false) };
+    start_scan(app, Scope::Folder(dir))?;
+    Ok(true)
+}
+
+/// "Dừng": the running scan ends before its next folder and reports what it found so far.
+#[tauri::command]
+fn stop_scan(st: St) {
+    if st.quick_running.load(Ordering::SeqCst) {
+        st.quick_stop.store(true, Ordering::SeqCst);
+    }
+}
+
+fn start_scan(app: AppHandle, scope: Scope) -> Result<(), String> {
     let st = app.state::<AppState>();
     if st.quick_running.swap(true, Ordering::SeqCst) {
         return Err("busy".into());
     }
+    st.quick_stop.store(false, Ordering::SeqCst);
     let a = app.clone();
     std::thread::spawn(move || {
         let st = a.state::<AppState>();
-        let mut roots = genra_av_core::targets::quick_targets();
-        roots.extend(genra_av_core::targets::removable_volumes());
+        let (label, mut roots, skip, depth, folder) = match scope {
+            Scope::Quick => ("quick", genra_av_core::targets::quick_targets(), Vec::new(), None, None),
+            Scope::Full => (
+                "full",
+                genra_av_core::targets::full_scan_roots(),
+                genra_av_core::targets::full_scan_skip(),
+                Some(genra_av_core::scanner::DEEP),
+                None,
+            ),
+            Scope::Folder(dir) => ("folder", vec![dir.clone()], Vec::new(), Some(genra_av_core::scanner::DEEP), Some(dir)),
+        };
+        if folder.is_none() {
+            roots.extend(genra_av_core::targets::removable_volumes());
+            roots = genra_av_core::targets::outermost(roots);
+            // Office's own XLSTART sits under Program Files, which a whole-drive scan skips:
+            // walk it on its own, as the quick scan does.
+            roots.extend(
+                genra_av_core::targets::excel_startup_dirs()
+                    .into_iter()
+                    .filter(|d| skip.iter().any(|s| d.starts_with(s))),
+            );
+        }
         let rules = st.rules();
-        let result = quick::run(&st.data, &rules, &roots, |p| {
+        let mut walk = genra_av_core::scanner::Walk::quick();
+        walk.skip = &skip;
+        walk.stop = Some(&st.quick_stop);
+        if let Some(d) = depth {
+            walk.max_depth = d;
+        }
+        let job = quick::Job { scope: label, roots: &roots, walk };
+        let result = quick::run_job(&st.data, &rules, &job, |p| {
             let _ = a.emit("quick-progress", p);
         });
         for h in &result.hits {
@@ -425,14 +496,16 @@ fn quick_scan(app: AppHandle) -> Result<(), String> {
             id: util::new_id(),
             at: result.at,
             kind: Kind::QuickScan,
-            name: String::new(),
-            path: None,
+            // "" for the quick scan (older entries have it too), else `full` / `folder`.
+            name: if label == "quick" { String::new() } else { label.to_string() },
+            path: folder.map(|d| d.to_string_lossy().into_owned()),
             verdict: result.hits.iter().filter_map(|h| h.report.verdict).max(),
             family: None,
             files: Some(result.files_seen),
             hits: Some(result.hits.len() as u64),
             undo: None,
             undone: false,
+            stopped: result.stopped,
             items: result.hits.iter().take(history::MAX_ITEMS).map(hit_item).collect(),
         });
         st.quick_running.store(false, Ordering::SeqCst);
@@ -529,6 +602,7 @@ async fn fix_health(app: AppHandle, fix: machine::FixId) -> Result<genra_av_mach
             hits: None,
             undo: Some(Undo::Group { id: report.group_id.clone() }),
             undone: false,
+            stopped: false,
             items: Vec::new(),
         });
     }
@@ -565,6 +639,7 @@ async fn disable_startup(app: AppHandle, id: String) -> Result<genra_av_machine:
             hits: None,
             undo: Some(Undo::Group { id: report.group_id.clone() }),
             undone: false,
+            stopped: false,
             items: Vec::new(),
         });
     }
@@ -766,6 +841,7 @@ pub fn run() {
                 history: Mutex::new(History::load(&data)),
                 settings: Mutex::new(Settings::load(&data)),
                 quick_running: AtomicBool::new(false),
+                quick_stop: AtomicBool::new(false),
                 machine: Box::new(machine::Real::new(&data)),
                 pending: Mutex::new(HashMap::new()),
                 overview: Mutex::new(None),
@@ -809,6 +885,8 @@ pub fn run() {
             undo,
             history,
             quick_scan,
+            scan_folder,
+            stop_scan,
             recheck_hit,
             reveal,
             open_link,

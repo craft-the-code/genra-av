@@ -52,6 +52,9 @@ const state = {
   report: { open: false, note: "", status: "idle", error: "" } as ReportState,
   quick: {
     running: false,
+    /** What the running scan walks: the usual places, every drive, or a folder. */
+    scope: "quick" as "quick" | "full" | "folder",
+    stopping: false,
     folder: "",
     files: 0,
     waiting: false,
@@ -208,6 +211,39 @@ function lastQuickEntry(): api.Entry | undefined {
   return state.history?.entries.find((e) => e.kind === "quick_scan");
 }
 
+type Pending = { entry: api.Entry; item: api.HitItem };
+
+/** Files earlier scans found that nothing has dealt with, newest scan first. A folder scan or a
+ * stopped scan saw only part of the computer, so the scans before it still count; a quick or
+ * whole-computer scan that ran to the end replaces everything older. */
+function pendingItems(): Pending[] {
+  const out: Pending[] = [];
+  const seen = new Set<string>();
+  for (const e of state.history?.entries ?? []) {
+    if (e.kind !== "quick_scan") continue;
+    for (const item of openItems(e)) {
+      if (!seen.has(item.path)) {
+        seen.add(item.path);
+        out.push({ entry: e, item });
+      }
+    }
+    if (entryScope(e) !== "folder" && !e.stopped) break;
+  }
+  return out;
+}
+
+type ScanScope = "quick" | "full" | "folder";
+
+/** The scope a history entry was scanned with (older entries are quick scans). */
+function entryScope(e: api.Entry): ScanScope {
+  return e.path ? "folder" : e.name === "full" ? "full" : "quick";
+}
+
+function safeText(scope: ScanScope, folder: string, at: number, files: number): string {
+  const args = { when: t("time.at", { time: fmtWhen(at) }), files: nf(files), folder: shortFolder(folder) };
+  return t(scope === "full" ? "band.safe.full" : scope === "folder" ? "band.safe.folder" : "band.safe.text", args);
+}
+
 function band(): string {
   const q = state.quick;
   let tn: Tone | "busy" | "mark" = "mark";
@@ -227,9 +263,12 @@ function band(): string {
       title = t("band.waiting.title");
       text = [t("band.waiting.text", { folder: shortFolder(q.folder) })];
     } else {
-      title = t("band.running.title");
+      title = t(q.scope === "full" ? "band.running.full" : q.scope === "folder" ? "band.running.folder" : "band.running.title");
       text = [q.folder ? t("band.running.text", { folder: shortFolder(q.folder), files: nf(q.files) }) : t("band.running.start")];
     }
+    action = q.stopping
+      ? `<button class="btn on-dark" disabled>${esc(t("band.stopping"))}</button>`
+      : `<button class="btn on-dark" data-action="stop-scan" data-fid="band-stop">${esc(t("band.stop"))}</button>`;
   } else if (hits.length) {
     const first = hits[0];
     const bad = hits.some((h) => !h.hash_only);
@@ -241,24 +280,30 @@ function band(): string {
       t(first.hash_only ? "band.hits.suspicious" : "band.hits.promise"),
     ];
     action = first.hash_only ? primary("band-look", t("band.look")) : primary("band-clean", t("band.clean"));
-  } else if (q.result) {
-    ok = true;
-    tn = "ok";
-    title = t("band.safe.title");
-    text = [t("band.safe.text", { when: t("time.at", { time: fmtWhen(q.result.at) }), files: nf(q.result.files_seen) })];
-    action = secondary("quick", t("band.scan"));
   } else {
     const last = lastQuickEntry();
-    if (last && (last.hits ?? 0) > 0) {
+    const pending = pendingItems().length;
+    if (pending) {
+      tn = "warn";
+      title = t("band.previous.title", { n: pending });
+      text = [t("band.previous.listed")];
+      action = primary("quick", t("band.scan"));
+    } else if (last?.stopped) {
+      // A stopped scan saw only part of the computer: never call that "safe".
+      title = t("band.stopped.title");
+      text = [t("band.stopped.text", { files: nf(last.files ?? 0) })];
+      action = primary("quick", t("band.scan"));
+    } else if (last && (last.hits ?? 0) > 0 && !(last.items ?? []).length) {
+      // Written before scans kept their file list.
       tn = "warn";
       title = t("band.previous.title", { n: last.hits ?? 0 });
-      text = [t(openItems(last).length ? "band.previous.listed" : "band.previous.text")];
+      text = [t("band.previous.text")];
       action = primary("quick", t("band.scan"));
     } else if (last) {
       ok = true;
       tn = "ok";
       title = t("band.safe.title");
-      text = [t("band.safe.text", { when: t("time.at", { time: fmtWhen(last.at) }), files: nf(last.files ?? 0) })];
+      text = [safeText(entryScope(last), last.path ?? "", last.at, last.files ?? 0)];
       action = secondary("quick", t("band.scan"));
     } else {
       title = t("band.never.title");
@@ -267,6 +312,13 @@ function band(): string {
     }
   }
   if (q.error) text.push(t("band.error", { detail: q.error }));
+  // The usual scan stays the one button; the wider ones sit beside it as quiet links.
+  const more = q.running
+    ? ""
+    : `<div class="band-more">
+        <button class="link on-dark" data-action="scan-full" data-fid="band-full">${esc(t("band.full"))}</button>
+        <button class="link on-dark" data-action="scan-folder" data-fid="band-folder">${esc(t("band.folder"))}</button>
+      </div>`;
   const glyph =
     tn === "busy"
       ? '<div class="band-spinner" aria-hidden="true"></div>'
@@ -280,6 +332,7 @@ function band(): string {
       <h2 id="band-title">${esc(title)}</h2>
       ${text.map((x) => `<p>${esc(x)}</p>`).join("")}
       ${action ? `<div class="actions">${action}</div>` : ""}
+      ${more}
     </div>
   </section>`;
 }
@@ -310,17 +363,18 @@ function hitsCard(): string {
       sub: [r.hash_only ? t("status.hash") : familyName(topFinding(r)?.family ?? ""), folder(r.path)].filter(Boolean).join(" · "),
       action: `<button class="link" data-action="hit-open" data-path="${esc(r.path)}" data-fid="hit-${i}">${esc(t("hits.open"))}<span class="sr-only"> ${esc(r.name)}</span></button>`,
     }));
-  } else if (!state.quick.result) {
-    const last = lastQuickEntry();
-    if (last) {
-      rows = openItems(last).map((it, i) => ({
-        tone: it.hash_only ? "warn" : verdictTone(it.verdict),
-        name: it.name,
-        sub: [it.hash_only ? t("status.hash") : it.family ? familyName(it.family) : "", folder(it.path)].filter(Boolean).join(" · "),
-        action: `<button class="link" data-action="hit-recheck" data-entry="${esc(last.id)}" data-path="${esc(it.path)}" data-fid="hit-${i}">${esc(t("hits.recheck"))}<span class="sr-only"> ${esc(it.name)}</span></button>`,
-      }));
-    }
   }
+  // Files earlier scans found (a folder scan does not clear what the quick scan saw elsewhere).
+  const listed = new Set(current.map((r) => r.path));
+  const older = pendingItems().filter((p) => !listed.has(p.item.path));
+  rows = rows.concat(
+    older.map(({ entry, item: it }, i) => ({
+      tone: it.hash_only ? "warn" : verdictTone(it.verdict),
+      name: it.name,
+      sub: [it.hash_only ? t("status.hash") : it.family ? familyName(it.family) : "", folder(it.path)].filter(Boolean).join(" · "),
+      action: `<button class="link" data-action="hit-recheck" data-entry="${esc(entry.id)}" data-path="${esc(it.path)}" data-fid="hit-old-${i}">${esc(t("hits.recheck"))}<span class="sr-only"> ${esc(it.name)}</span></button>`,
+    })),
+  );
   if (!rows.length) return "";
   const shown = state.hitsAll ? rows : rows.slice(0, HIT_ROWS);
   const list = shown
@@ -389,9 +443,14 @@ function historyRows(): Row[] {
         const hits = e.hits ?? 0;
         return {
           at: e.at,
-          tone: hits ? verdictTone(e.verdict) : "ok",
-          name: t("history.quick"),
-          sub: `${t(hits ? "history.quick.hits" : "history.quick.safe", { files: nf(e.files ?? 0), hits })} · ${when}`,
+          tone: hits ? verdictTone(e.verdict) : e.stopped ? "warn" : "ok",
+          name:
+            entryScope(e) === "full"
+              ? t("history.full")
+              : entryScope(e) === "folder"
+                ? t("history.folder", { folder: shortFolder(e.path ?? "") })
+                : t("history.quick"),
+          sub: `${t(hits ? "history.quick.hits" : e.stopped ? "history.quick.stopped" : "history.quick.safe", { files: nf(e.files ?? 0), hits })} · ${when}`,
         };
       }
       default:
@@ -1224,12 +1283,24 @@ async function doUndo(u: Undo) {
   void refreshHistory();
 }
 
-async function startQuick() {
+async function startQuick(scope: ScanScope = "quick") {
   if (state.quick.running) return;
-  Object.assign(state.quick, { running: true, folder: "", files: 0, waiting: false, error: "" });
-  render();
+  const begin = () => {
+    Object.assign(state.quick, { running: true, scope, stopping: false, folder: "", files: 0, waiting: false, error: "" });
+    render();
+  };
   try {
-    await api.quickScan();
+    if (scope === "folder") {
+      // Running from the start, so a tiny folder's "done" cannot arrive before the band switches.
+      begin();
+      if (!(await api.scanFolder())) {
+        state.quick.running = false;
+        render();
+      }
+    } else {
+      begin();
+      await api.quickScan(scope);
+    }
   } catch (e) {
     if (String(e) !== "busy") {
       state.quick.running = false;
@@ -1290,6 +1361,17 @@ root.addEventListener("click", (ev) => {
       break;
     case "quick":
       void startQuick();
+      break;
+    case "scan-full":
+      void startQuick("full");
+      break;
+    case "scan-folder":
+      void startQuick("folder");
+      break;
+    case "stop-scan":
+      state.quick.stopping = true;
+      render();
+      void api.stopScan();
       break;
     case "close-excel":
       void closeExcel();
@@ -1434,8 +1516,8 @@ async function start() {
     if (state.page === "overview") render();
   });
   await api.onQuickDone((r) => {
-    Object.assign(state.quick, { running: false, waiting: false, result: r, handled: new Set<string>() });
-    render();
+    Object.assign(state.quick, { running: false, stopping: false, waiting: false, result: r, handled: new Set<string>() });
+    // The band reads the new history entry (folder and stopped scans keep older findings).
     void refreshHistory();
   });
   await api.onRulesChanged(() => void refreshRules());

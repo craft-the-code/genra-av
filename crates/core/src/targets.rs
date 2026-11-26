@@ -64,18 +64,81 @@ fn home() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
 
-/// Downloads, Desktop, Documents, Zalo's received-files folder, and (Windows) Excel's startup
-/// folder, where macro worms persist. Only folders that exist are returned.
+/// Folders under the home folder the quick scan walks. Pictures and Videos are cheap to walk
+/// (only files that can carry code are read) and are where phones and Zalo PC save what they get.
+const QUICK_SUBDIRS: &[&str] = &[
+    "Downloads",
+    "Desktop",
+    "Documents",
+    "Pictures",
+    "Videos",
+    "Documents/Zalo Received Files",
+    "Zalo Received Files",
+];
+
+/// Downloads, Desktop, Documents, Pictures, Videos (also their OneDrive copies on Windows, where
+/// OneDrive often moves them), Zalo's received-files folder, and (Windows) Excel's startup folder,
+/// where macro worms persist. Only folders that exist are returned; a folder inside another
+/// listed one is walked once.
 pub fn quick_targets() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(h) = home() {
-        for sub in ["Downloads", "Desktop", "Documents", "Documents/Zalo Received Files", "Zalo Received Files"] {
-            out.push(h.join(sub));
+    let mut bases: Vec<PathBuf> = home().into_iter().collect();
+    if cfg!(windows) {
+        for var in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+            if let Some(p) = std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()) {
+                bases.push(p);
+            }
         }
+    }
+    let mut out = Vec::new();
+    for b in &bases {
+        out.extend(QUICK_SUBDIRS.iter().map(|sub| b.join(sub)));
     }
     out.extend(excel_startup_dirs());
     out.retain(|p| p.is_dir());
-    out.dedup();
+    outermost(out)
+}
+
+/// Drops duplicates and folders that sit inside another folder of the list, so nothing is
+/// walked twice. Order is kept.
+pub fn outermost(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for d in dirs {
+        if out.iter().any(|o| d.starts_with(o)) {
+            continue;
+        }
+        out.retain(|o| !o.starts_with(&d));
+        out.push(d);
+    }
+    out
+}
+
+/// "Quét toàn bộ máy": every fixed drive on Windows (C:, D:, …); the home folder elsewhere,
+/// since the rest of a Mac or Linux disk is the system. Removable drives are added by the caller.
+pub fn full_scan_roots() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        windows_drives(3) // DRIVE_FIXED
+    }
+    #[cfg(not(windows))]
+    {
+        home().into_iter().filter(|p| p.is_dir()).collect()
+    }
+}
+
+/// Folders a whole-drive scan leaves out: Windows itself and installed programs. They are large,
+/// hold signed system files rather than documents users receive, and reading every DLL in them
+/// would make the scan many times slower. User data under `AppData` and `ProgramData` is kept.
+pub fn full_scan_skip() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if cfg!(windows) {
+        for var in ["SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Some(p) = std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()) {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -157,15 +220,20 @@ fn diskutil_says_removable(info: &str) -> bool {
 
 #[cfg(windows)]
 fn windows_removable() -> Vec<PathBuf> {
+    windows_drives(2) // DRIVE_REMOVABLE
+}
+
+/// Drive roots (`C:\`) whose `GetDriveTypeW` is `kind`.
+#[cfg(windows)]
+fn windows_drives(kind: u32) -> Vec<PathBuf> {
     use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
-    const DRIVE_REMOVABLE: u32 = 2;
     let mask = unsafe { GetLogicalDrives() };
     (0..26u32)
         .filter(|i| mask & (1 << i) != 0)
         .map(|i| format!("{}:\\", (b'A' + i as u8) as char))
         .filter(|root| {
             let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
-            unsafe { GetDriveTypeW(wide.as_ptr()) == DRIVE_REMOVABLE }
+            unsafe { GetDriveTypeW(wide.as_ptr()) == kind }
         })
         .map(PathBuf::from)
         .collect()
@@ -225,5 +293,21 @@ mod tests {
         assert!(in_startup_folder(Path::new("/u/Excel/xlstart/sub/book.dat")));
         assert!(!in_startup_folder(Path::new("/u/Downloads/PERSONAL")));
         assert!(!in_startup_folder(Path::new("/u/XLSTART")), "the folder itself is not inside it");
+    }
+
+    #[test]
+    fn nested_and_repeated_folders_are_walked_once() {
+        let dirs = vec![
+            PathBuf::from("/h/Documents/Zalo Received Files"),
+            PathBuf::from("/h/Downloads"),
+            PathBuf::from("/h/Documents"),
+            PathBuf::from("/h/Downloads"),
+        ];
+        assert_eq!(outermost(dirs), [PathBuf::from("/h/Downloads"), PathBuf::from("/h/Documents")]);
+    }
+
+    #[test]
+    fn whole_computer_has_at_least_one_root() {
+        assert!(!full_scan_roots().is_empty());
     }
 }

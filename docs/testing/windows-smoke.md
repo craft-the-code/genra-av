@@ -46,10 +46,17 @@ Test files: use a **copy** of a known infected sample (Kangatang .xls) kept in a
 - [ ] "Quét nhanh máy" finishes, shows progress, and a second run is much faster.
 - [ ] Plug in a USB stick with a copy of the infected file → it is found by the quick scan
       (removable drive listed as a target).
+- [ ] A copy of the infected file in `Pictures` (and, if OneDrive moves Documents, in
+      `OneDrive\Documents`) is found by the quick scan.
+- [ ] "Quét toàn bộ máy" walks C: and D: (if present), shows "Dừng"; pressing it ends the scan with
+      "Đã dừng quét giữa chừng", never "Máy an toàn", and earlier findings stay listed.
+- [ ] "Chọn thư mục để quét…" opens the folder picker; a folder holding a copy of the infected file
+      lists it under "Tệp tìm thấy".
 
 ## 6. Update and uninstall
 
-- [ ] After the next pre-release exists, the app offers the update and installs it.
+- [ ] Updates reach official releases only (GitHub's `releases/latest` skips pre-releases). After
+      promoting this version, a PC still on the previous official version offers the update and installs it.
 - [ ] Uninstall from Settings → Apps; `%LOCALAPPDATA%\Genra AV` keeps quarantine/journal only if the user chose to.
 
 Record: Windows version, Excel version, result per section, and the install id used.

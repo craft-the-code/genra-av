@@ -68,6 +68,9 @@ pub struct Entry {
     pub undo: Option<Undo>,
     #[serde(default)]
     pub undone: bool,
+    /// Quick scan: stopped part way, so it saw only some of the computer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped: bool,
     /// Quick scan: the files it found (at most [`MAX_ITEMS`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<HitItem>,
@@ -127,6 +130,7 @@ mod tests {
             hits: None,
             undo,
             undone: false,
+            stopped: false,
             items: Vec::new(),
         };
         h.push(entry("a", None)).unwrap();

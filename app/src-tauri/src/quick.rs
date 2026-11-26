@@ -26,6 +26,10 @@ pub struct Progress {
 #[derive(Debug, Serialize)]
 pub struct QuickResult {
     pub at: i64,
+    /// `quick`, `full` or `folder`.
+    pub scope: &'static str,
+    /// The user pressed "Dừng": the result covers only what was walked.
+    pub stopped: bool,
     pub files_seen: u64,
     pub files_read: u64,
     pub files_cached: u64,
@@ -54,17 +58,29 @@ pub fn hash_only(r: &genra_av_core::Report) -> bool {
     !serious.is_empty() && serious.iter().all(|f| f.rule.starts_with("hash."))
 }
 
-pub fn run(data: &Path, rules: &Loaded, roots: &[PathBuf], emit: impl Fn(Progress)) -> QuickResult {
+/// What to walk and how: the folders, their depth and skips, and the stop flag.
+pub struct Job<'a> {
+    pub scope: &'static str,
+    pub roots: &'a [PathBuf],
+    pub walk: scanner::Walk<'a>,
+}
+
+pub fn run_job(data: &Path, rules: &Loaded, job: &Job, emit: impl Fn(Progress)) -> QuickResult {
+    let roots = job.roots;
     let cache_path = data.join("scan-cache.json");
     let mut ctx = scanner::Context::new(Some(&rules.pack), Some(&rules.reputation), Cache::load(&cache_path));
     let mut total = Summary::default();
     let mut seen = 0u64;
+    let mut stopped = false;
     for root in roots {
+        if stopped {
+            break;
+        }
         let folder = root.to_string_lossy().into_owned();
         emit(Progress { phase: "walking", folder: folder.clone(), files: seen });
         probe(root, || emit(Progress { phase: "waiting", folder: folder.clone(), files: seen }));
         let mut last = Instant::now();
-        let s = scanner::walk(&mut ctx, std::slice::from_ref(root), |p| {
+        let s = scanner::walk_with(&mut ctx, std::slice::from_ref(root), &job.walk, |p| {
             seen += 1;
             if last.elapsed() >= EMIT_EVERY {
                 last = Instant::now();
@@ -76,6 +92,7 @@ pub fn run(data: &Path, rules: &Loaded, roots: &[PathBuf], emit: impl Fn(Progres
         total.files_read += s.files_read;
         total.files_cached += s.files_cached + s.files_rechecked;
         total.hits.extend(s.hits);
+        stopped = s.stopped;
     }
     let _ = std::fs::create_dir_all(data);
     let _ = ctx.cache.save(&cache_path);
@@ -90,6 +107,8 @@ pub fn run(data: &Path, rules: &Loaded, roots: &[PathBuf], emit: impl Fn(Progres
         .collect();
     QuickResult {
         at: crate::util::now(),
+        scope: job.scope,
+        stopped,
         files_seen: total.files_seen,
         files_read: total.files_read,
         files_cached: total.files_cached,
@@ -102,6 +121,10 @@ pub fn run(data: &Path, rules: &Loaded, roots: &[PathBuf], emit: impl Fn(Progres
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    fn run(data: &Path, rules: &Loaded, roots: &[PathBuf], emit: impl Fn(Progress)) -> QuickResult {
+        run_job(data, rules, &Job { scope: "quick", roots, walk: scanner::Walk::quick() }, emit)
+    }
 
     #[test]
     fn walks_reports_progress_and_keeps_the_cache() {

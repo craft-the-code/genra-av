@@ -97,13 +97,15 @@ export interface Entry {
   can_undo: boolean;
   /** Quick scan: the files it found. */
   items?: HitItem[];
+  /** Quick scan: stopped part way. */
+  stopped?: boolean;
 }
 export interface HitItem { path: string; name: string; verdict?: Severity; family?: string; hash_only: boolean }
 export interface QuarantineItem { id: string; original_path: string; sha256: string; size: number; reason: string; quarantined_at: number }
 export interface HistoryView { entries: Entry[]; other_quarantine: QuarantineItem[] }
 
 export interface Progress { phase: "walking" | "waiting"; folder: string; files: number }
-export interface QuickResult { at: number; files_seen: number; files_read: number; files_cached: number; roots: string[]; hits: ScanResult[] }
+export interface QuickResult { at: number; scope: "quick" | "full" | "folder"; stopped: boolean; files_seen: number; files_read: number; files_cached: number; roots: string[]; hits: ScanResult[] }
 
 export type HealthStatus = "ok" | "warn" | "bad" | "unknown";
 export interface HealthItem {
@@ -145,7 +147,10 @@ export const closeExcel = () => invoke<void>("close_excel");
 export const quarantineFile = (path: string) => invoke<Quarantined>("quarantine_file", { path });
 export const undo = (u: Undo) => invoke<string[]>("undo", { undo: u });
 export const history = () => invoke<HistoryView>("history");
-export const quickScan = () => invoke<void>("quick_scan");
+export const quickScan = (scope: "quick" | "full" = "quick") => invoke<void>("quick_scan", { scope });
+/** Opens the folder picker and scans the folder; false when the picker was closed. */
+export const scanFolder = () => invoke<boolean>("scan_folder");
+export const stopScan = () => invoke<void>("stop_scan");
 export const recheckHit = (entryId: string, path: string) => invoke<void>("recheck_hit", { entryId, path });
 export const reveal = (path: string) => invoke<void>("reveal", { path });
 export const openLink = (which: "privacy" | "terms" | "source") => invoke<void>("open_link", { which });
