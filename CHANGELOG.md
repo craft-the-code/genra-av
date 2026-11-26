@@ -5,6 +5,21 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-26
+
+Pre-release: Windows installers are not code-signed yet; macOS is signed and notarised.
+
+### Added
+- "Quét tuỳ chọn": scan the whole computer (every drive and USB stick, leaving out Windows and
+  installed programs but not Office's startup folder) or several folders picked at once, each
+  removable from the list before the scan starts.
+- A "Dừng" button on every scan. A stopped scan says so and is never reported as "Máy an toàn".
+- The quick scan also walks Pictures, Videos and, on Windows, the OneDrive copies of the usual folders.
+
+### Changed
+- A folder scan or a stopped scan keeps what earlier scans found in "Tệp tìm thấy".
+- App updates reach official releases only; pre-releases are installed by hand.
+
 ## [0.1.1] - 2026-11-26
 
 Pre-release: Windows installers are not code-signed yet; macOS is signed and notarised.
