@@ -6,6 +6,8 @@ members = ["crates/core", "crates/cli"]
 version = "0.1.0"
 edition = "2021"
 authors = ["Hoan Le"]
+license = "Apache-2.0"
+repository = "https://github.com/craft-the-code/genra-av"
 publish = false
 
 [profile.release]

@@ -26,7 +26,7 @@ Exit: a real Kangatang sample is caught as malware; clean `.docx` stays OK; a ta
 6. Fuzzing (`cargo fuzz`) on the OLE and VBA parsers.
 
 Exit: 0 false positives on the clean corpus; people in 2 offices use the web check unprompted.
-Open-source step is taken here: Apache-2.0 (Q9), public repo.
+Open source since 26/11/2026: Apache-2.0, public on GitHub (moved up from P1, Hoan).
 
 ## P2 Desktop app (Windows first): the repair experience
 

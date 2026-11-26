@@ -6,9 +6,9 @@ A free scanner for the threats Vietnamese offices and families actually receive:
 with macro worms (Kangatang and its kind), downloader macros, and the files passed around on Zalo,
 email and USB sticks. It sits next to Windows Defender, not in its place.
 
-Status: **P0, engine prototype.** Command line only. The UI is designed first
-([docs/ux/README.md](docs/ux/README.md)); no UI code until its questions are answered.
-Private for now; it opens up once it is good enough (see Licence).
+Status: **building v0.1.** The engine and command line work; the desktop app is in progress.
+UX decisions, tokens and mock-ups: [docs/ux/README.md](docs/ux/README.md). Release plan:
+[docs/release-plan.md](docs/release-plan.md).
 
 ## Try it
 
@@ -37,5 +37,7 @@ encrypted archive outside the repo (password `infected` by convention) and test 
 
 ## Licence
 
-Copyright © 2026 Hoan Le. All rights reserved for now (see [LICENSE](LICENSE)).
-It will be released under Apache-2.0 once P1 is done.
+Apache License 2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)). Copyright © 2026 Hoan Le and contributors.
+
+Contributions are welcome under the same licence. Please never attach live malware to an issue or
+pull request; describe the sample and share its SHA-256 instead.

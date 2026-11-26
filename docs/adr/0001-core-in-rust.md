@@ -1,6 +1,6 @@
 # ADR 0001: one detection core in Rust
 
-Status: accepted for the core (Hoan, 26/11/2026). UI shell open (Q4). Licence open (Q9).
+Status: accepted (Hoan, 26/11/2026). UI shell: Tauri 2 (ADR 0003). Licence: Apache-2.0 (Q9).
 
 ## Context
 
