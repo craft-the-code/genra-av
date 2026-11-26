@@ -36,6 +36,14 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - Desktop app shell (Tauri 2, `app/`): sidebar with six screens, light/dark/system theme, Vietnamese and
   English; "Kiểm tra tệp" scans a dropped or chosen file with the bundled rules; "báo nhầm" sends a
   false-positive report (hash, rule id, note; never the file). Other screens show "Sắp có" states.
+- Desktop app v2: navy sidebar with four places (Tổng quan, Kiểm tra tệp, Máy của bạn, Cài đặt), the
+  brand band with one action, "Lịch sử & hoàn tác". Signed rule packs are downloaded on start and every
+  6 hours, verified (signature, expiry, version floor, hash-list digests) and swapped in atomically;
+  the bundled pack is the fallback. "Dọn sạch giúp tôi" replaces the file with a macro-free copy in
+  place, keeps the original in quarantine, re-scans, and undoes in one press. "Quét nhanh máy" runs in
+  the background with progress and says when it is waiting for the macOS permission prompt.
+  Commands that take a path accept only paths picked, dropped or found by a scan in this session.
+- `genra_av_core::paths::data_dir()` shared by the CLI and the app (`GENRA_AV_DATA_DIR` overrides it).
 - Brand, UX decisions, design tokens and v1 mock-ups (`docs/`).
 - Machine repair (`crates/machine`): "Dọn sạch giúp tôi" cleans the machine, not just the file. A
   journal written before every change, one-press undo per repair (refused if a file changed since,
