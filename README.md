@@ -6,12 +6,12 @@ A free scanner for the threats Vietnamese offices and families actually receive:
 with macro worms (Kangatang and its kind), downloader macros, and the files passed around on Zalo,
 email and USB sticks. It sits next to Windows Defender, not in its place.
 
-Status: **building v0.1.** The engine and command line work; the desktop app is in progress.
+Status: **0.1.2 pre-release**, working towards 1.0. Roadmap: [docs/roadmap.md](docs/roadmap.md).
 
 Download: installers for Windows (`Genra-AV-Setup.exe`, `Genra-AV.msi`), macOS (`Genra-AV.dmg`) and
 Linux (`Genra-AV.AppImage`, `genra-av.deb`) are on [GitHub Releases](https://github.com/craft-the-code/genra-av/releases),
-each with `SHA256SUMS` and build attestations. 0.x versions are pre-releases; the beta's Windows
-installer is unsigned. How releases are made: [docs/releasing.md](docs/releasing.md).
+each with `SHA256SUMS` and build attestations. 0.x versions are pre-releases; Windows installers are
+unsigned until SignPath Foundation approves the project ([code signing policy](docs/signing.md#code-signing-policy)). How releases are made: [docs/releasing.md](docs/releasing.md).
 UX decisions, tokens and mock-ups: [docs/ux/README.md](docs/ux/README.md). Release plan:
 [docs/release-plan.md](docs/release-plan.md).
 
