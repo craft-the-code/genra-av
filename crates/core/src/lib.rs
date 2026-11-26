@@ -4,6 +4,7 @@
 pub mod clean;
 pub mod extract;
 pub mod ovba;
+pub mod paths;
 pub mod quarantine;
 pub mod reputation;
 pub mod rules;
