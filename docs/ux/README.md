@@ -39,6 +39,8 @@ This puts a desktop repair engine early: the web check (Q3) finds problems, the 
 
 ## Principles
 
+0. **Fewer steps, same result** (Hoan, 26/11): every journey is counted in
+   [usability-audit.md](usability-audit.md); everyday journeys take ≤ 2 actions and ≤ 1 moment of attention.
 1. **One status, in plain words.** "Máy an toàn" / "Có 1 việc cần xử lý". No jargon on the main
    screen ("macro", "heuristic", "quarantine" only behind "Xem chi tiết").
 2. **One primary action per screen.** The button says what happens: "Làm sạch tệp", not "OK".
