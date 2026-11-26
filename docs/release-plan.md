@@ -2,12 +2,23 @@
 
 Written 26/11/2026. Decisions marked (Hoan) are his; the rest are proposals until he says otherwise.
 
-## v0.1 beta: "Kiểm tra + Dọn sạch"
+## v0.1 beta: a real first release, not only Office files
 
-Scope (proposal): drag-and-drop file check; **Dọn sạch giúp tôi** (clean the file, remove the
-Kangatang worm from Excel's startup folder, clean other infected Excel files, verify); quarantine +
-undo 30 days; rule pack bundled in the app; signed app auto-update; Vietnamese + English; light theme.
-Not in v0.1: folder guard, rule updates over the CDN, health screen (→ v0.2).
+Scope (Hoan, 26/11): the first release must already feel like an antivirus.
+
+1. **Kiểm tra tệp + Dọn sạch giúp tôi**: drag-and-drop check; clean the file *and* the machine
+   (Kangatang and kin out of Excel's startup, other infected workbooks cleaned, verified); quarantine + undo 30 days.
+2. **Quét nhanh máy + danh tiếng hash**: Downloads, Desktop, Documents, Zalo received files, USB drives;
+   public malware hashes (e.g. abuse.ch MalwareBazaar) and YARA-X rules for scripts, LNK, HTA,
+   archives and PDF, all inside the signed pack.
+3. **Rà soát khởi động + dọn**: everything that starts with Windows (Run keys, Startup folders,
+   Scheduled Tasks, services, XLSTART, Office add-ins), suspicious ones flagged, removable with undo.
+4. **Sức khoẻ máy**: Defender on and up to date, Windows Update, Office macro setting, firewall, with "Sửa giúp tôi".
+5. **Canh gác thư mục + USB**: the `genra-guard` background process checks new files in those folders
+   and on USB insert, and notifies only when there is something to do.
+
+Plus: app auto-update, Vietnamese + English, light theme, report / false-positive button (backend live).
+Later (v0.2+): rule updates over the CDN between app releases, static ML on executables, behaviour layer.
 
 Audience: a small group of testers. Windows installer **unsigned** for the beta (SignPath applied for once CI builds exist),
 macOS signed + notarised (existing Apple Developer account).

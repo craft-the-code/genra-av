@@ -30,6 +30,8 @@ Open source since 26/11/2026: Apache-2.0, public on GitHub (moved up from P1, Ho
 
 ## P2 Desktop app (Windows first): the repair experience
 
+v0.1 ships P2 together with the quick scan, hash reputation and YARA-X part of P3 (docs/release-plan.md).
+
 The core experience is "Dọn giúp tôi" without breaking anything (docs/ux, core experience).
 
 - `genra-guard` background process (Rust, no UI) + Tauri 2 window opened on demand (ADR 0003);
