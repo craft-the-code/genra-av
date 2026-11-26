@@ -175,6 +175,13 @@ h3 { font-size: 17px; line-height: 24px; font-weight: 700; margin: 0; }
 .btn.on-dark { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .45); display: inline-flex; align-items: center; gap: 8px; justify-content: center; }
 .btn.on-dark.primary { background: #fff; border-color: #fff; color: var(--brand-800); }
 .btn.on-dark:focus-visible { outline-color: #fff; }
+.progress-line { display: flex; align-items: center; gap: 12px; margin-top: 14px; max-width: 560px; }
+.progress { position: relative; flex: 1; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .18); overflow: hidden; margin-top: 14px; max-width: 560px; }
+.progress-line .progress { margin-top: 0; }
+.progress > span { position: absolute; inset: 0 auto 0 0; background: #fff; border-radius: 4px; transition: width 200ms ease-out; }
+.progress.indeterminate > span { width: 35%; animation: slide 1.4s ease-in-out infinite; }
+.progress-pct { color: #fff; font-variant-numeric: tabular-nums; font-size: 13px; min-width: 4ch; text-align: right; }
+@keyframes slide { 0% { left: -35%; } 100% { left: 100%; } }
 .band-more { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 20px; }
 .link.on-dark { color: #d7e0f5; font-weight: 500; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
 .link.on-dark:hover { color: #fff; }
@@ -341,11 +348,18 @@ legend { font-size: 17px; line-height: 24px; font-weight: 700; padding: 0; margi
 .row.startup > .icon { margin-top: 2px; }
 .loc { font-weight: 400; font-size: 12px; }
 .cmd { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.skel { display: block; background: var(--surface-2); border-radius: 6px; animation: pulse 1.2s ease-in-out infinite; }
+.skel { display: block; background: var(--border); border-radius: 6px; animation: pulse 1.2s ease-in-out infinite; }
 .skel.dot { width: 22px; height: 22px; border-radius: 50%; }
 .skel.bar { height: 12px; width: 60%; }
 .skel.bar.short { width: 35%; margin-top: 6px; }
 @keyframes pulse { 50% { opacity: .5; } }
+.loading-row { align-items: center; }
+.skel.bar.inline { display: inline-block; width: 18ch; height: 12px; vertical-align: middle; }
+/* withPending(): the button that started a call spins until it answers. */
+[data-busy="true"] { cursor: progress; }
+[data-busy="true"]::before { content: ""; width: 14px; height: 14px; flex: none; margin-right: 6px; display: inline-block; vertical-align: -2px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 800ms linear infinite; }
+.link.with-icon[data-busy="true"] > svg { display: none; }
+.loading-row .spinner { margin: 0 1px; }
 
 /* Cài đặt: install id */
 .install-id { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }

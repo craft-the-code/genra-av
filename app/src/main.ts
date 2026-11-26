@@ -79,10 +79,32 @@ const state = {
   copied: false,
   notice: null as Notice,
   dragOver: false,
+  /** Buttons whose call is in flight (key per button), shown busy one by one, never the page. */
+  pending: new Set<string>(),
+  /** Startup reads that have not answered yet; each component waits only for its own. */
+  loaded: { history: false, rules: false, settings: false },
 };
 let scanToken = 0;
 
 // ---------- helpers
+
+/** Shared loading pattern: the button that started a call shows a spinner and is disabled until
+ * it answers; the rest of the page stays usable. */
+async function withPending<T>(key: string, run: () => Promise<T>): Promise<T> {
+  state.pending.add(key);
+  render();
+  try {
+    return await run();
+  } finally {
+    state.pending.delete(key);
+    render();
+  }
+}
+
+/** Attributes for a button tied to `withPending(key, …)`. */
+function busyAttr(key: string): string {
+  return state.pending.has(key) ? ' disabled aria-busy="true" data-busy="true"' : "";
+}
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -179,7 +201,7 @@ function applyTheme() {
 
 function rulesLine(): string {
   const r = state.rules;
-  if (!r) return "";
+  if (!r) return state.loaded.rules ? "" : t("footer.rules.loading");
   if (r.source === "installed" && r.last_ok) return t("footer.rules.updated", { when: relTime(r.last_ok) });
   if (r.source === "bundled" && r.last_error) return t("footer.rules.bundled_failed");
   return t("footer.rules.bundled");
@@ -248,6 +270,24 @@ function safeText(scope: ScanScope, folder: string, at: number, files: number, f
   return t(key, args);
 }
 
+/** Files the last finished scan of this kind looked at: the scale for the progress bar. Folder
+ * scans differ each time, so they get no scale. */
+function expectedFiles(scope: ScanScope): number {
+  if (scope === "folder") return 0;
+  const prev = (state.history?.entries ?? []).find((e) => e.kind === "quick_scan" && entryScope(e) === scope && !e.stopped);
+  return prev?.files ?? 0;
+}
+
+/** Percent against the last run (held at 99 % until done); a moving bar when there is no scale. */
+function progressBar(scope: ScanScope, files: number): string {
+  const total = expectedFiles(scope);
+  if (!total) {
+    return `<div class="progress indeterminate" role="progressbar" aria-label="${esc(t("band.progress"))}"><span></span></div>`;
+  }
+  const pct = Math.min(99, Math.floor((files * 100) / total));
+  return `<div class="progress-line"><div class="progress" role="progressbar" aria-label="${esc(t("band.progress"))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div><span class="progress-pct">${pct}%</span></div>`;
+}
+
 function band(): string {
   const q = state.quick;
   let tn: Tone | "busy" | "mark" = "mark";
@@ -260,6 +300,7 @@ function band(): string {
     `<button class="btn on-dark" data-action="${a}" data-fid="band-${a}">${line("refresh-cw", 16)}${esc(label)}</button>`;
   const hits = remainingHits();
   let ok = false;
+  let progress = "";
 
   if (q.running) {
     tn = q.waiting ? "mark" : "busy";
@@ -270,9 +311,14 @@ function band(): string {
       title = t(q.scope === "full" ? "band.running.full" : q.scope === "folder" ? "band.running.folder" : "band.running.title");
       text = [q.folder ? t("band.running.text", { folder: shortFolder(q.folder), files: nf(q.files) }) : t("band.running.start")];
     }
+    if (!q.waiting) progress = progressBar(q.scope, q.files);
     action = q.stopping
       ? `<button class="btn on-dark" disabled>${esc(t("band.stopping"))}</button>`
       : `<button class="btn on-dark" data-action="stop-scan" data-fid="band-stop">${esc(t("band.stop"))}</button>`;
+  } else if (!state.loaded.history) {
+    // Only the band waits for the history read; the rest of the page is already there.
+    tn = "busy";
+    title = t("band.loading");
   } else if (hits.length) {
     const first = hits[0];
     const bad = hits.some((h) => !h.hash_only);
@@ -318,7 +364,7 @@ function band(): string {
   if (q.error) text.push(t("band.error", { detail: q.error }));
   // The usual scan stays the one button; the wider ones sit beside it as quiet links.
   const more =
-    q.running || state.custom.open
+    q.running || state.custom.open || !state.loaded.history
       ? ""
       : `<div class="band-more"><button class="link on-dark" data-action="custom-open" data-fid="band-custom">${esc(t("band.custom"))}</button></div>`;
   const glyph =
@@ -333,6 +379,7 @@ function band(): string {
     <div class="band-body">
       <h2 id="band-title">${esc(title)}</h2>
       ${text.map((x) => `<p>${esc(x)}</p>`).join("")}
+      ${progress}
       ${action ? `<div class="actions">${action}</div>` : ""}
       ${more}
     </div>
@@ -372,7 +419,7 @@ function customCard(): string {
       c.full
         ? ""
         : `${rows ? `<ul class="rows">${rows}</ul>` : `<p class="empty">${esc(t("custom.empty"))}</p>`}
-      <button class="link with-icon" data-action="custom-add" data-fid="custom-add">${line("plus", 16)}${esc(t("custom.add"))}</button>`
+      <button class="link with-icon" data-action="custom-add" data-fid="custom-add"${busyAttr("pick-folders")}>${line("plus", 16)}${esc(t("custom.add"))}</button>`
     }
     <div class="actions">
       <button class="btn primary" data-action="custom-start" data-fid="custom-start" ${ready ? "" : "disabled"}>${esc(t("custom.start"))}</button>
@@ -404,7 +451,7 @@ function hitsCard(): string {
       tone: it.hash_only ? "warn" : verdictTone(it.verdict),
       name: it.name,
       sub: [it.hash_only ? t("status.hash") : it.family ? familyName(it.family) : "", folder(it.path)].filter(Boolean).join(" · "),
-      action: `<button class="link" data-action="hit-recheck" data-entry="${esc(entry.id)}" data-path="${esc(it.path)}" data-fid="hit-old-${i}">${esc(t("hits.recheck"))}<span class="sr-only"> ${esc(it.name)}</span></button>`,
+      action: `<button class="link" data-action="hit-recheck" data-entry="${esc(entry.id)}" data-path="${esc(it.path)}" data-fid="hit-old-${i}"${busyAttr(`recheck:${it.path}`)}>${esc(t("hits.recheck"))}<span class="sr-only"> ${esc(it.name)}</span></button>`,
     })),
   );
   if (!rows.length) return "";
@@ -517,12 +564,16 @@ function fixName(id: string): string {
 }
 
 function historyCard(): string {
+  if (!state.loaded.history) {
+    return `<section class="card history" aria-labelledby="history-title" aria-busy="true">
+    <h2 class="overline" id="history-title">${esc(t("history.title"))}</h2><ul class="rows">${skeletonRows(2)}</ul></section>`;
+  }
   const rows = historyRows();
   const shown = state.historyAll ? rows : rows.slice(0, HISTORY_ROWS);
   const list = shown
     .map((r, i) => {
       const act = r.undo
-        ? `<button class="link with-icon" data-action="undo" data-type="${r.undo.type}" data-id="${esc(r.undo.id)}" data-fid="undo-${i}">${line("undo-2", 16)}${esc(r.undoLabel ?? "")}<span class="sr-only"> ${esc(r.name)}</span></button>`
+        ? `<button class="link with-icon" data-action="undo" data-type="${r.undo.type}" data-id="${esc(r.undo.id)}" data-fid="undo-${i}"${busyAttr(`undo:${r.undo.id}`)}>${line("undo-2", 16)}${esc(r.undoLabel ?? "")}<span class="sr-only"> ${esc(r.name)}</span></button>`
         : r.undone
           ? `<span class="muted caption">${esc(t("history.undone"))}</span>`
           : "";
@@ -803,7 +854,7 @@ function quarantinedResult(q: api.Quarantined): string {
       <div class="result-head"><h2 id="res-title">${esc(t("quarantined.title"))}</h2><p>${esc(t("quarantined.text", { name: q.name }))}</p></div>
       <div class="actions">
         <button class="btn primary" data-action="pick" data-fid="again">${esc(t("result.again"))}</button>
-        <button class="link with-icon" data-action="undo" data-type="quarantine" data-id="${esc(q.id)}" data-fid="undo-q">${line("undo-2", 18)}${esc(t("history.restore"))}</button>
+        <button class="link with-icon" data-action="undo" data-type="quarantine" data-id="${esc(q.id)}" data-fid="undo-q"${busyAttr(`undo:${q.id}`)}>${line("undo-2", 18)}${esc(t("history.restore"))}</button>
       </div>
     </div>
   </section>`;
@@ -856,6 +907,11 @@ function skeletonRows(n: number): string {
   return Array.from({ length: n }, () => `<li class="row skel-row" aria-hidden="true"><span class="skel dot"></span><div class="row-text"><span class="skel bar"></span><span class="skel bar short"></span></div><span></span></li>`).join("");
 }
 
+/** A row that says what is being read while it loads, so a slow PC never shows an empty card. */
+function loadingRow(what: string): string {
+  return `<li class="row loading-row"><span class="spinner" aria-hidden="true"></span><div class="row-text"><div class="row-name">${esc(what)}</div><div class="row-sub">${esc(t("machine.loading.hint"))}</div></div></li>`;
+}
+
 function startupRow(s: api.StartupItem, i: number): string {
   const who = [s.publisher, s.signed === true ? t("machine.signed") : s.signed === false ? t("machine.unsigned") : ""].filter(Boolean).join(" · ");
   const busy = state.machineBusy === s.id;
@@ -899,7 +955,7 @@ function machinePage(): string {
         .map((h) => row(healthTone(h.status), tr(h.title_vi, h.title_en), tr(h.detail_vi, h.detail_en)))
         .join("")
     : loading
-      ? skeletonRows(3)
+      ? loadingRow(t("machine.loading.health")) + skeletonRows(2)
       : "";
 
   let startup = "";
@@ -915,7 +971,7 @@ function machinePage(): string {
     startup = items.length
       ? `${list ? `<ul class="rows">${list}</ul>` : `<p class="empty">${esc(t("machine.startup.fine", { n: fine.length }))}</p>`}${more}`
       : `<p class="empty">${esc(t("machine.startup.empty"))}</p>`;
-  } else if (loading) startup = `<ul class="rows">${skeletonRows(3)}</ul>`;
+  } else if (loading) startup = `<ul class="rows">${loadingRow(t("machine.loading.startup"))}${skeletonRows(2)}</ul>`;
 
   const guardIcon: Record<api.GuardPlace["kind"], string> = { downloads: "folder", zalo: "message-square", usb: "hard-drive" };
   const places: api.GuardPlace[] = m?.guard ?? [
@@ -943,7 +999,7 @@ function machinePage(): string {
   const n = state.machineNotice;
   const notice = n
     ? `<div class="notice ${n.tone}" role="status">${icon(n.tone)}<span>${esc(n.text)}</span>${
-        n.undo ? `<button class="link with-icon" data-action="undo" data-type="${n.undo.type}" data-id="${esc(n.undo.id)}" data-fid="machine-undo">${line("undo-2", 16)}${esc(t("history.undo"))}</button>` : ""
+        n.undo ? `<button class="link with-icon" data-action="undo" data-type="${n.undo.type}" data-id="${esc(n.undo.id)}" data-fid="machine-undo"${busyAttr(`undo:${n.undo.id}`)}>${line("undo-2", 16)}${esc(t("history.undo"))}</button>` : ""
       }</div>`
     : "";
   return `<h1 tabindex="-1">${esc(t("machine.title"))}</h1>
@@ -952,7 +1008,7 @@ function machinePage(): string {
     <div class="stack">
       ${cards}
       <section class="card" aria-labelledby="m-health" aria-busy="${loading}"><h2 class="overline" id="m-health">${esc(t("machine.health"))}</h2>
-        <ul class="rows">${row(r?.source === "installed" ? "ok" : "warn", t("machine.rules"), rulesDetail)}${health}</ul></section>
+        <ul class="rows">${r ? row(r.source === "installed" ? "ok" : "warn", t("machine.rules"), rulesDetail) : skeletonRows(1)}${health}</ul></section>
       <section class="card" aria-labelledby="m-startup" aria-busy="${loading}"><h2 class="overline" id="m-startup">${esc(t("machine.startup"))}</h2>${startup}</section>
       <section class="card" aria-labelledby="m-guard"><h2 class="overline" id="m-guard">${esc(t("machine.guard"))}</h2>
         <ul class="rows">${guard}</ul></section>
@@ -979,12 +1035,12 @@ function settingsPage(): string {
         ${radio("lang", "vi", "Tiếng Việt", getLang() === "vi")}${radio("lang", "en", "English", getLang() === "en")}
       </div></fieldset></section>
       <section class="card"><h3>${esc(t("settings.privacy"))}</h3><p class="flat">${esc(t("settings.privacy.text"))}</p>
-        <label class="toggle"><input type="checkbox" name="send_hashes" data-fid="send-hashes"${state.settings.send_hashes ? " checked" : ""}>
+        <label class="toggle"><input type="checkbox" name="send_hashes" data-fid="send-hashes"${state.settings.send_hashes ? " checked" : ""}${state.pending.has("send-hashes") || !state.loaded.settings ? " disabled" : ""}>
           <span class="switch" aria-hidden="true"></span>
           <span><span class="toggle-title">${esc(t("settings.send_hashes"))}</span><span class="row-sub">${esc(t("settings.send_hashes.text"))}</span></span></label>
         <div class="install-id">
           <div class="row-text"><span class="toggle-title" id="install-id-label">${esc(t("settings.install_id"))}</span>
-            <code class="mono" aria-labelledby="install-id-label" data-fid="install-id">${esc(state.installId || "—")}</code>
+            <code class="mono" aria-labelledby="install-id-label" data-fid="install-id">${state.installId ? esc(state.installId) : '<span class="skel bar inline" aria-label="…"></span>'}</code>
             <span class="row-sub">${esc(t("settings.install_id.text"))}</span></div>
           <button class="btn with-icon" data-action="copy-id" data-fid="copy-id"${state.installId ? "" : " disabled"}>${line("copy", 16)}${esc(
             state.copied ? t("settings.install_id.copied") : t("settings.install_id.copy"),
@@ -1002,7 +1058,7 @@ function settingsPage(): string {
           <dt>${esc(t("settings.rules.hashes"))}</dt><dd>${nf(r.hashes)}</dd>
           <dt>${esc(t("settings.rules.checked"))}</dt><dd>${esc(checked)}</dd>
         </dl>`
-            : ""
+            : `<ul class="rows">${skeletonRows(2)}</ul>`
         }
       </section>
       <section class="card"><h3>${esc(t("settings.about"))}</h3><p class="muted flat">${esc(t("settings.about.text", { app: state.appVersion }))}</p>
@@ -1383,9 +1439,11 @@ root.addEventListener("click", (ev) => {
         void doUndo({ type: "group", id: state.act.done.group_id });
       }
       break;
-    case "undo":
-      void doUndo({ type: el.dataset.type as "quarantine" | "group", id: el.dataset.id ?? "" } as Undo);
+    case "undo": {
+      const u = { type: el.dataset.type as "quarantine" | "group", id: el.dataset.id ?? "" } as Undo;
+      void withPending(`undo:${u.id}`, () => doUndo(u));
       break;
+    }
     case "quick":
       void startQuick();
       break;
@@ -1398,7 +1456,7 @@ root.addEventListener("click", (ev) => {
       render();
       break;
     case "custom-add":
-      api.pickFolders().then(
+      withPending("pick-folders", () => api.pickFolders()).then(
         (picked) => {
           for (const f of picked) if (!state.custom.folders.includes(f)) state.custom.folders.push(f);
           render();
@@ -1485,8 +1543,7 @@ root.addEventListener("click", (ev) => {
     }
     case "hit-recheck": {
       const path = el.dataset.path ?? "";
-      api
-        .recheckHit(el.dataset.entry ?? "", path)
+      withPending(`recheck:${path}`, () => api.recheckHit(el.dataset.entry ?? "", path))
         .then(() => scanPath(path))
         .catch((e) => {
           state.scan = { status: "error", code: "other", detail: String(e) };
@@ -1541,7 +1598,7 @@ root.addEventListener("change", (ev) => {
     state.custom.full = el.checked;
     render();
   } else if (el.name === "send_hashes") {
-    void api.setSendHashes(el.checked).then(
+    void withPending("send-hashes", () => api.setSendHashes(el.checked)).then(
       (s) => {
         state.settings = s;
         render();
@@ -1580,15 +1637,29 @@ async function start() {
     else render();
   });
 
-  const [rules, version, settings, hist, installId] = await Promise.all([
-    api.rulesInfo(),
-    getVersion(),
-    api.getSettings(),
-    api.history(),
-    api.installId().catch(() => ""),
-  ]);
-  Object.assign(state, { rules, appVersion: version, settings, history: hist, installId });
+  // The window draws at once; each part fills in when its own read answers (no page-wide wait).
   render();
+  const fill = <T,>(p: Promise<T>, set: (v: T) => void) =>
+    p.then(set, () => {}).finally(() => render());
+  void fill(api.rulesInfo(), (rules) => {
+    state.rules = rules;
+    state.loaded.rules = true;
+  });
+  void fill(getVersion(), (v) => (state.appVersion = v));
+  void fill(api.getSettings(), (settings) => {
+    state.settings = settings;
+    state.loaded.settings = true;
+  });
+  void fill(api.installId(), (id) => (state.installId = id));
+  const hist = await api.history().catch(() => ({ entries: [], other_quarantine: [] }) as api.HistoryView);
+  state.history = hist;
+  state.loaded.history = true;
+  render();
+  // "Máy của bạn" takes seconds on Windows (PowerShell): read it in the background soon after
+  // start, so the tab is usually ready when opened.
+  setTimeout(() => {
+    if (!state.machine && !state.machineLoading) void loadMachine(false);
+  }, 1500);
   // Updates come from signed GitHub releases; a failed check (offline, no release yet) stays silent.
   api
     .checkUpdate()

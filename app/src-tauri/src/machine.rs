@@ -207,9 +207,15 @@ pub struct Overview {
     pub guard: Vec<GuardPlace>,
 }
 
-pub fn overview(m: &dyn Machine, rules: &Loaded) -> Overview {
-    let startup = m.startup(rules).into_iter().map(|item| StartupView { can_disable: can_disable(&item), item }).collect();
-    Overview { health: m.health(), startup, guard: guard_places() }
+/// Health and startup items are read side by side: on Windows each waits on PowerShell
+/// (Defender status, signatures) for several seconds, so running them in turn doubled the wait.
+pub fn overview(m: &(dyn Machine + Sync), rules: &Loaded) -> Overview {
+    let (health, startup) = std::thread::scope(|s| {
+        let h = s.spawn(|| m.health());
+        let startup: Vec<StartupView> = m.startup(rules).into_iter().map(|item| StartupView { can_disable: can_disable(&item), item }).collect();
+        (h.join().unwrap_or_default(), startup)
+    });
+    Overview { health, startup, guard: guard_places() }
 }
 
 #[cfg(test)]

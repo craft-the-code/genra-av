@@ -5,6 +5,17 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+### Added
+- Scan progress bar, scaled by the last finished scan of the same kind (a moving bar otherwise).
+- Roadmap (`docs/roadmap.md`) and code signing policy (`docs/signing.md`).
+
+### Changed
+- The window draws at once; each part (status, history, rules, settings) shows its own loading
+  state instead of the whole page waiting.
+- Buttons that start a call (undo, check again, add folders, the hash setting) show their own spinner.
+- "Máy của bạn" reads health and startup items side by side, starts loading in the background after
+  launch, and says what it is checking while it loads instead of showing empty cards.
+
 ## [0.1.2] - 2026-11-26
 
 Pre-release: Windows installers are not code-signed yet; macOS is signed and notarised.
