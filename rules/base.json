@@ -7,6 +7,7 @@
       "id": "GENRA.Office.Kangatang.A",
       "family": "Kangatang",
       "severity": "malware",
+      "machine_persistence": "xlstart",
       "message_vi": "Sâu macro Kangatang: tự chép vào thư mục khởi động Excel (XLSTART\\mypersonnel.xls), lây sang mọi sổ được mở và đổi .xlsx thành .xls. Không mở tệp này bằng Excel; dọn máy theo hướng dẫn.",
       "when": {
         "vba_source_all": ["mypersonnel.xls", "OnSheetActivate"]
@@ -16,6 +17,7 @@
       "id": "GENRA.Office.Kangatang.Module",
       "family": "Kangatang",
       "severity": "malware",
+      "machine_persistence": "xlstart",
       "message_vi": "Có module VBA tên Kangatang (biến thể sâu Kangatang).",
       "when": {
         "vba_module_name_any": ["Kangatang"]

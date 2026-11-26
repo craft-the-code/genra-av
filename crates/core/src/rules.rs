@@ -150,6 +150,11 @@ pub struct Rule {
     pub message_vi: String,
     #[serde(default)]
     pub when: When,
+    /// Where this threat persists on the machine, so "Dọn sạch giúp tôi" also cleans there. The
+    /// only value so far is `xlstart` (Excel's startup folders). Repairs are a fixed list in
+    /// `genra-av-machine`; a rule can only point at one of them, never add a new kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_persistence: Option<String>,
 }
 
 /// Every condition that is set must hold; a rule with no condition never matches.
