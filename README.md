@@ -22,6 +22,14 @@ cargo build --release
 
 Exit code `0` nothing found, `1` suspicious or malware, `2` error. `--json` prints one report per line.
 
+Desktop app (Tauri 2; needs Node 20+ and the Tauri system prerequisites):
+
+```bash
+cd app && npm install
+npm run tauri dev                      # opens the window; drop a file on "Kiểm tra tệp"
+npx tauri build --bundles app          # release bundle under target/release/bundle/
+```
+
 ## How it is built
 
 - `crates/core` reads files without running them: OLE2 (`.xls/.doc/.ppt`) and OOXML zips
