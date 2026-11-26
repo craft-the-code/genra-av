@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["nsis", "msi", "app", "dmg", "appimage", "deb"],
+    "homepage": "https://github.com/craft-the-code/genra-av",
+    "copyright": "Copyright © 2026 Hoan Le and contributors",
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "wix": {
+        "upgradeCode": "58b030d2-d1c7-507b-9dcb-fa4f08cbc6fe"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBGNTZFOTk1Q0I0QTQ5RDkKUldUWlNVckxsZWxXRDhFRVV1R2k4SnY3cVJWUURUakp2VThCNk9wNWlzQjNxSHJ3WmIwMi9iRmMK",
+      "endpoints": [
+        "https://github.com/craft-the-code/genra-av/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

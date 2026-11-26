@@ -1,0 +1,398 @@
+# Builds the desktop installers for a version tag and publishes them as a GitHub Release.
+# How to cut a release, and the secrets and environment it needs: docs/releasing.md.
+#
+# - guard (read-only): the tag must be v<x.y.z> and equal the version in Cargo.toml, Cargo.lock,
+#   tauri.conf.json and app/package*.json, and CHANGELOG.md must have a section for it.
+# - build (read-only token, environment `release` for the signing secrets), one job per OS:
+#   Windows NSIS .exe + .msi, macOS universal .dmg, Linux AppImage + .deb. Release-only settings
+#   come from app/src-tauri/tauri.release.conf.json. Files are copied to fixed names (stable
+#   `releases/latest/download/<name>` links) and versioned names, and uploaded as artifacts.
+#   macOS is signed and notarised only when all six APPLE_* secrets exist; Windows is unsigned for
+#   the beta; updater signatures are made only when TAURI_SIGNING_PRIVATE_KEY exists.
+# - publish (environment `release`, which only v*.*.* tags may deploy to): latest.json (when the
+#   updater files are signed), SHA256SUMS, build provenance attestations, notes from CHANGELOG.md,
+#   then a draft release with every file, published once all uploads succeeded. 0.x versions are
+#   marked pre-release.
+#
+# Re-running for the same tag fails at "Create the release" if the release already exists:
+# delete the release (not the tag) first.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.1.0. Run the workflow from that tag (Use workflow from: Tags)."
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag=${INPUT_TAG:-$REF_NAME}
+          [[ $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+            { echo "::error::'$tag' is not v<x.y.z> (numbers only; MSI refuses suffixes)"; exit 1; }
+          # The release environment accepts tags only, so a dispatch must run from the tag itself.
+          if [ "$REF_TYPE" != tag ] || [ "$REF_NAME" != "$tag" ]; then
+            echo "::error::run this workflow from the tag $tag (gh workflow run release.yml --ref $tag -f tag=$tag)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+
+      - name: Version and changelog
+        id: check
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version=$(python3 scripts/check-version.py "$TAG")
+          python3 scripts/release-notes.py CHANGELOG.md "$version" > /dev/null
+          prerelease=false
+          [ "${version%%.*}" = 0 ] && prerelease=true
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $TAG (version $version, pre-release $prerelease)"
+
+  build:
+    needs: guard
+    # The signing secrets live in this environment. Jobs here run npm and cargo dependencies,
+    # which is unavoidable for signing inside `tauri build`; the token stays read-only.
+    environment: release
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            runner: windows-latest
+            bundles: nsis,msi
+            target: ""
+          - os: macos
+            runner: macos-latest
+            bundles: app,dmg
+            target: universal-apple-darwin
+          - os: linux
+            runner: ubuntu-22.04
+            bundles: appimage,deb
+            target: ""
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      TAG: ${{ needs.guard.outputs.tag }}
+      VERSION: ${{ needs.guard.outputs.version }}
+      # 'true' only when every value is set; secrets cannot be read in `if:` directly.
+      APPLE_SIGNING_READY: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != '' }}
+      UPDATER_KEY_READY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.guard.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          # No cache in release builds: a poisoned cache would end up in a signed installer.
+          package-manager-cache: false
+
+      - name: Rust targets (universal macOS)
+        if: matrix.os == 'macos'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Linux system packages (Tauri 2 prerequisites)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential \
+            curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
+
+      - name: Updater public key is set
+        if: env.UPDATER_KEY_READY == 'true'
+        run: |
+          # Windows runners have `python`, not `python3`.
+          py=python3; [ "$RUNNER_OS" = Windows ] && py=python
+          "$py" -c '
+          import json, sys
+          key = json.load(open("app/src-tauri/tauri.release.conf.json"))["plugins"]["updater"]["pubkey"]
+          sys.exit("plugins.updater.pubkey in tauri.release.conf.json is still the TODO placeholder" if key.startswith("TODO") else 0)'
+
+      - name: Import the Apple certificate into a temporary keychain
+        if: matrix.os == 'macos' && env.APPLE_SIGNING_READY == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          keychain="$RUNNER_TEMP/genra-release.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          echo "::add-mask::$keychain_password"
+          umask 077
+          base64 --decode <<<"$APPLE_CERTIFICATE" > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # Keep the login keychain in the search list, add ours in front.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain" | grep -qF "$APPLE_SIGNING_IDENTITY" ||
+            { echo "::error::the signing identity is not in the imported certificate"; exit 1; }
+          base64 --decode <<<"$APPLE_API_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "GENRA_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "GENRA_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: npm ci
+        working-directory: app
+        run: npm ci
+
+      - name: tauri build
+        working-directory: app
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+          TARGET: ${{ matrix.target }}
+          SEC_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SEC_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          SEC_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SEC_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SEC_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # Tauri reads APPLE_* and TAURI_SIGNING_* itself, and an empty value is not the same as
+        # an unset one, so they are exported only when they will be used.
+        run: |
+          args=(--ci --config src-tauri/tauri.release.conf.json --bundles "$BUNDLES")
+          [ -n "$TARGET" ] && args+=(--target "$TARGET")
+          if [ "$UPDATER_KEY_READY" = true ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$SEC_TAURI_SIGNING_PRIVATE_KEY"
+            [ -n "$SEC_TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ] &&
+              export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$SEC_TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            args+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+          fi
+          if [ "$RUNNER_OS" = macOS ] && [ "$APPLE_SIGNING_READY" = true ]; then
+            # Signs with the identity from the temporary keychain, notarises the .app with the
+            # App Store Connect API key and staples it.
+            export APPLE_SIGNING_IDENTITY="$SEC_APPLE_SIGNING_IDENTITY"
+            export APPLE_API_KEY="$SEC_APPLE_API_KEY_ID"
+            export APPLE_API_ISSUER="$SEC_APPLE_API_ISSUER"
+            export APPLE_API_KEY_PATH="$GENRA_API_KEY_PATH"
+          fi
+          unset SEC_APPLE_SIGNING_IDENTITY SEC_APPLE_API_KEY_ID SEC_APPLE_API_ISSUER \
+            SEC_TAURI_SIGNING_PRIVATE_KEY SEC_TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          npx tauri build "${args[@]}"
+
+      # Windows is unsigned for the beta. Once SignPath Foundation approves the project, sign the
+      # NSIS .exe and the .msi here, before they are copied (and before updater signatures, which
+      # must then be made over the signed files: run `tauri signer sign` again afterwards):
+      #
+      # - name: Upload unsigned Windows installers
+      #   if: matrix.os == 'windows'
+      #   id: unsigned
+      #   uses: actions/upload-artifact@<sha> # pinned
+      #   with:
+      #     name: windows-unsigned
+      #     path: target/release/bundle/*/*.*
+      # - name: Sign with SignPath
+      #   if: matrix.os == 'windows'
+      #   uses: signpath/github-action-submit-signing-request@<sha> # pinned
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: <SignPath organization id>
+      #     project-slug: genra-av
+      #     signing-policy-slug: release-signing
+      #     github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: target/release/bundle
+
+      - name: Sign, notarise and staple the dmg
+        if: matrix.os == 'macos' && env.APPLE_SIGNING_READY == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          shopt -s nullglob
+          dmgs=(target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected one dmg, found ${#dmgs[@]}"; exit 1; }
+          dmg=${dmgs[0]}
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --keychain "$GENRA_KEYCHAIN" --timestamp "$dmg"
+          xcrun notarytool submit "$dmg" --key "$GENRA_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" --wait --timeout 60m
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose "$dmg"
+          app=$(find target/universal-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' | head -n 1)
+          spctl --assess --type execute --verbose "$app"
+
+      - name: Remove the keychain and API key
+        if: always() && matrix.os == 'macos' && env.APPLE_SIGNING_READY == 'true'
+        run: |
+          [ -n "${GENRA_KEYCHAIN:-}" ] && security delete-keychain "$GENRA_KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/cert.p12"
+
+      - name: Copy to the release file names
+        env:
+          TARGET: ${{ matrix.target }}
+          OS: ${{ matrix.os }}
+        run: |
+          bundle_dir="target/${TARGET:+$TARGET/}release/bundle"
+          expect=()
+          [ "$UPDATER_KEY_READY" = true ] && expect=(--expect-updater)
+          py=python3; [ "$RUNNER_OS" = Windows ] && py=python
+          "$py" scripts/collect-bundles.py --os "$OS" --version "$VERSION" \
+            --bundle-dir "$bundle_dir" --out release "${expect[@]}"
+          mkdir -p meta
+          signed=unsigned
+          [ "$OS" = macos ] && [ "$APPLE_SIGNING_READY" = true ] && signed=signed
+          echo "$signed" > "meta/$OS-signing.txt"
+          echo "updater=$UPDATER_KEY_READY" >> "meta/$OS-signing.txt"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle-${{ matrix.os }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: meta-${{ matrix.os }}
+          path: meta/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only v*.*.* tags may deploy to this environment (docs/releasing.md).
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.guard.outputs.tag }}
+      VERSION: ${{ needs.guard.outputs.version }}
+      PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+    steps:
+      # This tag's own scripts and CHANGELOG.md. Nothing is built or installed here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.guard.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bundle-*
+          path: release
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: meta-*
+          path: meta
+          merge-multiple: true
+
+      - name: Release notes and latest.json
+        run: |
+          python3 scripts/release-notes.py CHANGELOG.md "$VERSION" > changelog.md
+          python3 scripts/latest-json.py --dir release --version "$VERSION" --tag "$TAG" \
+            --repo "$GITHUB_REPOSITORY" --notes-file changelog.md
+          mac=$(head -n 1 meta/macos-signing.txt)
+          {
+            cat changelog.md
+            echo
+            echo "## Downloads"
+            echo
+            echo "| OS | File |"
+            echo "|---|---|"
+            echo "| Windows (per user, no admin) | \`Genra-AV-Setup.exe\` |"
+            echo "| Windows (IT / Group Policy) | \`Genra-AV.msi\` |"
+            echo "| macOS (Apple silicon and Intel) | \`Genra-AV.dmg\` |"
+            echo "| Linux | \`Genra-AV.AppImage\`, \`genra-av.deb\` |"
+            echo
+            echo "Versioned copies of the same files are attached too."
+            echo
+            echo "## Signing"
+            echo
+            echo "- Windows: **not signed** in this beta. SmartScreen will warn; choose More info, then Run anyway."
+            if [ "$mac" = signed ]; then
+              echo "- macOS: signed with Developer ID and notarised by Apple."
+            else
+              echo "- macOS: **not signed or notarised** in this build. Right-click the app, choose Open, then Open again."
+            fi
+            echo "- Linux: not signed."
+            if [ -f release/latest.json ]; then
+              echo "- Updater files are signed with the Genra AV updater key."
+            fi
+            echo
+            echo "## Verify a download"
+            echo
+            echo '```'
+            echo "sha256sum --check --ignore-missing SHA256SUMS"
+            echo "gh attestation verify Genra-AV.dmg --repo $GITHUB_REPOSITORY"
+            echo '```'
+          } > notes.md
+
+      - name: SHA256SUMS
+        working-directory: release
+        run: |
+          find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs -d '\n' sha256sum > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS
+
+      - name: Create the release
+        run: |
+          flags=(--verify-tag --draft --title "Genra AV $VERSION" --notes-file notes.md)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::release $TAG already exists; delete it (not the tag) to publish again"
+            exit 1
+          fi
+          # A draft first, so a failed upload never leaves a half-filled public release.
+          gh release create "$TAG" "${flags[@]}" release/*
+          gh release edit "$TAG" --draft=false
+          gh release view "$TAG" --json url,isPrerelease,assets -q '{url, isPrerelease, assets: [.assets[].name]}'
