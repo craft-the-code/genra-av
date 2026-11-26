@@ -175,6 +175,18 @@ h3 { font-size: 17px; line-height: 24px; font-weight: 700; margin: 0; }
 .btn.on-dark { background: transparent; color: #fff; border-color: rgba(255, 255, 255, .45); display: inline-flex; align-items: center; gap: 8px; justify-content: center; }
 .btn.on-dark.primary { background: #fff; border-color: #fff; color: var(--brand-800); }
 .btn.on-dark:focus-visible { outline-color: #fff; }
+.band-more { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 20px; }
+.link.on-dark { color: #d7e0f5; font-weight: 500; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.link.on-dark:hover { color: #fff; }
+.link.on-dark:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.custom .check { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0 12px; cursor: pointer; }
+.custom .check input { margin-top: 3px; width: 16px; height: 16px; accent-color: var(--brand-600, #2F6BEF); }
+.custom .rows { margin-bottom: 8px; }
+.custom .row > svg { color: var(--text-muted); flex: none; }
+.custom .actions { display: flex; gap: 12px; margin-top: 16px; }
+.icon-btn { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.icon-btn:hover { background: var(--surface-2, rgba(0, 0, 0, .06)); color: var(--text); }
+.icon-btn:focus-visible { outline: 2px solid var(--brand-600, #2F6BEF); outline-offset: 1px; }
 
 /* Cards */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 20px; }

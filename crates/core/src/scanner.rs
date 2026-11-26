@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 /// Files bigger than this are not read by the quick scan (installers and disk images are hashed
@@ -78,6 +79,8 @@ pub struct Summary {
     pub files_rechecked: u64,
     pub skipped_large: u64,
     pub hits: Vec<Hit>,
+    /// The walk ended early because [`Walk::stop`] was set.
+    pub stopped: bool,
 }
 
 pub struct Context<'a> {
@@ -163,12 +166,41 @@ pub fn scan_file(ctx: &mut Context, path: &Path, summary: &mut Summary) {
     }
 }
 
+/// How deep a walk goes and what it leaves out.
+pub struct Walk<'a> {
+    pub max_depth: usize,
+    /// Folders not walked into (compared exactly, e.g. `C:\Windows`), on top of
+    /// [`targets::skip_dir`].
+    pub skip: &'a [PathBuf],
+    /// Checked before each folder; when set, the walk returns what it has so far.
+    pub stop: Option<&'a AtomicBool>,
+}
+
+impl Walk<'_> {
+    /// The quick scan: a few known folders, not deep.
+    pub fn quick() -> Walk<'static> {
+        Walk { max_depth: MAX_DEPTH, skip: &[], stop: None }
+    }
+}
+
+/// Deep enough for a whole drive or a folder the user picked.
+pub const DEEP: usize = 24;
+
 /// Walks `roots` (depth-limited, skipping heavy/hidden folders) and scans interesting files.
 /// `progress` is called with each file path before it is considered.
-pub fn walk(ctx: &mut Context, roots: &[PathBuf], mut progress: impl FnMut(&Path)) -> Summary {
+pub fn walk(ctx: &mut Context, roots: &[PathBuf], progress: impl FnMut(&Path)) -> Summary {
+    walk_with(ctx, roots, &Walk::quick(), progress)
+}
+
+/// [`walk`] with its depth, extra skipped folders and a stop flag given.
+pub fn walk_with(ctx: &mut Context, roots: &[PathBuf], opts: &Walk, mut progress: impl FnMut(&Path)) -> Summary {
     let mut summary = Summary::default();
     let mut stack: Vec<(PathBuf, usize)> = roots.iter().map(|r| (r.clone(), 0)).collect();
     while let Some((dir, depth)) = stack.pop() {
+        if opts.stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
+            summary.stopped = true;
+            break;
+        }
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for entry in rd.flatten() {
             let path = entry.path();
@@ -177,7 +209,7 @@ pub fn walk(ctx: &mut Context, roots: &[PathBuf], mut progress: impl FnMut(&Path
                 continue;
             }
             if ft.is_dir() {
-                if depth < MAX_DEPTH && !targets::skip_dir(&path) {
+                if depth < opts.max_depth && !targets::skip_dir(&path) && !opts.skip.iter().any(|s| same_dir(s, &path)) {
                     stack.push((path, depth + 1));
                 }
             } else if ft.is_file() && (targets::interesting(&path) || targets::in_startup_folder(&path)) {
@@ -187,6 +219,15 @@ pub fn walk(ctx: &mut Context, roots: &[PathBuf], mut progress: impl FnMut(&Path
         }
     }
     summary
+}
+
+/// Windows paths compare without case; elsewhere exactly.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.as_os_str().to_string_lossy().eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+    } else {
+        a == b
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +362,28 @@ mod tests {
         let sha = hex::encode(Sha256::digest(bytes));
         let p = pack(&format!(r#"{{"id":"r","family":"F","severity":"malware","message_vi":"m","when":{{"sha256_any":["{sha}"]}}}}"#));
         assert!(scan_with(bytes, Some(&p), Some(&feed)).should_quarantine(), "a reviewed rule says malware");
+    }
+
+    #[test]
+    fn walk_with_skips_named_folders_and_stops_when_asked() {
+        let root = tmp("walk-with");
+        let keep = root.join("keep");
+        let sys = root.join("Windows");
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::create_dir_all(&sys).unwrap();
+        std::fs::write(keep.join("a.docx"), b"x").unwrap();
+        std::fs::write(sys.join("b.docx"), b"x").unwrap();
+        let mut ctx = Context::new(None, None, Cache::default());
+        let skip = [sys.clone()];
+        let opts = Walk { max_depth: DEEP, skip: &skip, stop: None };
+        let s = walk_with(&mut ctx, std::slice::from_ref(&root), &opts, |_| {});
+        assert_eq!(s.files_seen, 1, "the skipped folder is not walked");
+        assert!(!s.stopped);
+        let stop = AtomicBool::new(true);
+        let opts = Walk { max_depth: DEEP, skip: &[], stop: Some(&stop) };
+        let s = walk_with(&mut ctx, std::slice::from_ref(&root), &opts, |_| {});
+        assert!(s.stopped);
+        assert_eq!(s.files_seen, 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
