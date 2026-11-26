@@ -1,0 +1,25 @@
+name = "genra-api"
+main = "src/index.ts"
+compatibility_date = "2025-11-01"
+workers_dev = true
+
+routes = [{ pattern = "genra-api.craftthecode.dev", custom_domain = true }]
+
+[vars]
+RETENTION_DAYS = "90"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "genra"
+database_id = "00000000-0000-0000-0000-000000000000" # set after `wrangler d1 create genra`
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "SAMPLES"
+bucket_name = "genra-samples"
+
+[triggers]
+crons = ["17 20 * * *"] # 03:17 Vietnam time: purge past retention
+
+[observability]
+enabled = true
