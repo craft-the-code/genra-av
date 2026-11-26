@@ -1,4 +1,6 @@
-# Genra AV design tokens (v0, 26/11/2026)
+# Genra AV design tokens (v1, 26/11/2026)
+
+v2 adds the navy brand surfaces; the rest of the brand system is in [brand-system.md](brand-system.md).
 
 Small on purpose: the pattern of the top AV brands (graphite surfaces, one accent, status colours
 that mean one thing each), with Genra's own ☶ mark. **Light is the default theme** (Hoan, 26/11:
@@ -20,6 +22,9 @@ Each colour has one meaning. **Primary is never used for status, status colours 
 | `text-muted` | `#5B6270` | `#A3AAB8` | Secondary text |
 | `primary` | `#2F6BEF` | `#2F6BEF` | Buttons, focus ring, selected marker (Genra Lam) |
 | `primary-text` | `#2F6BEF` | `#6E9BFF` | Links and text actions |
+| `brand-900` | `#0A1530` | `#070E21` | Sidebar, installer, landing hero (v2) |
+| `brand-band` | `#0F1E40 → #22407F` | same | Gradient of the status band on Tổng quan, with the ☶ line motif at ≤ 8 % white (v2) |
+| `brand-text` | `#C3CDE3` | same | Inactive sidebar text on brand-900 (active: white, marker `#6E9BFF`) |
 | `success` | `#11804F` | `#2EBD85` | "An toàn", done |
 | `warning` | `#97590A` | `#F5A524` | Needs a look (suspicious, Defender off) |
 | `danger` | `#C62F35` | `#D93A40` | Malware only |

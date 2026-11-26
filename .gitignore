@@ -4,3 +4,4 @@
 *.key
 *.infected
 *.zip
+.DS_Store
