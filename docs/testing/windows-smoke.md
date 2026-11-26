@@ -48,10 +48,11 @@ Test files: use a **copy** of a known infected sample (Kangatang .xls) kept in a
       (removable drive listed as a target).
 - [ ] A copy of the infected file in `Pictures` (and, if OneDrive moves Documents, in
       `OneDrive\Documents`) is found by the quick scan.
-- [ ] "Quét toàn bộ máy" walks C: and D: (if present), shows "Dừng"; pressing it ends the scan with
-      "Đã dừng quét giữa chừng", never "Máy an toàn", and earlier findings stay listed.
-- [ ] "Chọn thư mục để quét…" opens the folder picker; a folder holding a copy of the infected file
-      lists it under "Tệp tìm thấy".
+- [ ] "Quét tuỳ chọn…" → tick "Toàn bộ máy" → "Bắt đầu quét" walks C: and D: (if present) and shows
+      "Dừng"; pressing it ends with "Đã dừng quét giữa chừng", never "Máy an toàn", and earlier
+      findings stay listed.
+- [ ] "Quét tuỳ chọn…" → "Thêm thư mục" picks two folders at once; (x) removes one; scanning the other,
+      which holds a copy of the infected file, lists it under "Tệp tìm thấy".
 
 ## 6. Update and uninstall
 

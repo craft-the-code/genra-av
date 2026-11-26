@@ -99,6 +99,8 @@ export interface Entry {
   items?: HitItem[];
   /** Quick scan: stopped part way. */
   stopped?: boolean;
+  /** Folder scan: how many folders (`path` is the first). */
+  folders?: number;
 }
 export interface HitItem { path: string; name: string; verdict?: Severity; family?: string; hash_only: boolean }
 export interface QuarantineItem { id: string; original_path: string; sha256: string; size: number; reason: string; quarantined_at: number }
@@ -148,8 +150,9 @@ export const quarantineFile = (path: string) => invoke<Quarantined>("quarantine_
 export const undo = (u: Undo) => invoke<string[]>("undo", { undo: u });
 export const history = () => invoke<HistoryView>("history");
 export const quickScan = (scope: "quick" | "full" = "quick") => invoke<void>("quick_scan", { scope });
-/** Opens the folder picker and scans the folder; false when the picker was closed. */
-export const scanFolder = () => invoke<boolean>("scan_folder");
+/** The folder picker, several at once; empty when it was closed. */
+export const pickFolders = () => invoke<string[]>("pick_folders");
+export const scanFolders = (folders: string[]) => invoke<void>("scan_folders", { folders });
 export const stopScan = () => invoke<void>("stop_scan");
 export const recheckHit = (entryId: string, path: string) => invoke<void>("recheck_hit", { entryId, path });
 export const reveal = (path: string) => invoke<void>("reveal", { path });

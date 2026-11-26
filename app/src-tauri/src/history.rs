@@ -71,9 +71,16 @@ pub struct Entry {
     /// Quick scan: stopped part way, so it saw only some of the computer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stopped: bool,
+    /// Folder scan: how many folders were picked (`path` holds the first).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub folders: u32,
     /// Quick scan: the files it found (at most [`MAX_ITEMS`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<HitItem>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 pub struct History {
@@ -131,6 +138,7 @@ mod tests {
             undo,
             undone: false,
             stopped: false,
+            folders: 0,
             items: Vec::new(),
         };
         h.push(entry("a", None)).unwrap();

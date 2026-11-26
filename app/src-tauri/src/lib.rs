@@ -178,6 +178,7 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
         undo: None,
         undone: false,
         stopped: false,
+        folders: 0,
         items: Vec::new(),
     });
     if result.report.verdict.is_some_and(|v| v >= Severity::Suspicious) {
@@ -223,6 +224,7 @@ fn execute(app: &AppHandle, plan: genra_av_machine::repair::Plan, name: String, 
                 undo: Some(Undo::Group { id: group_id.clone() }),
                 undone: false,
                 stopped: false,
+                folders: 0,
                 items: Vec::new(),
             });
             st.invalidate_overview();
@@ -315,6 +317,7 @@ async fn quarantine_file(app: AppHandle, path: String) -> Result<Quarantined, re
         undo: Some(Undo::Quarantine { id: item.id.clone() }),
         undone: false,
         stopped: false,
+        folders: 0,
         items: Vec::new(),
     });
     Ok(Quarantined { id: item.id, name })
@@ -409,7 +412,7 @@ fn history(st: St) -> Result<HistoryView, String> {
 enum Scope {
     Quick,
     Full,
-    Folder(PathBuf),
+    Folders(Vec<PathBuf>),
 }
 
 /// Starts a scan on a background thread; progress and the result arrive as events.
@@ -424,17 +427,36 @@ fn quick_scan(app: AppHandle, scope: Option<String>) -> Result<(), String> {
     start_scan(app, scope)
 }
 
-/// "Chọn thư mục để quét": the system folder picker, then a scan of that folder.
-/// Returns false when the user closed the picker.
+/// "Thêm thư mục" in "Quét tuỳ chọn": the system picker, several folders at once. Each one is
+/// allowed for [`scan_folders`]; an empty list when the picker was closed.
 #[tauri::command]
-async fn scan_folder(app: AppHandle) -> Result<bool, String> {
+async fn pick_folders(app: AppHandle) -> Result<Vec<String>, String> {
     let a = app.clone();
-    let picked = tauri::async_runtime::spawn_blocking(move || a.dialog().file().blocking_pick_folder())
+    let picked = tauri::async_runtime::spawn_blocking(move || a.dialog().file().blocking_pick_folders())
         .await
         .map_err(|e| e.to_string())?;
-    let Some(dir) = picked.and_then(|f| f.into_path().ok()) else { return Ok(false) };
-    start_scan(app, Scope::Folder(dir))?;
-    Ok(true)
+    let st = app.state::<AppState>();
+    Ok(picked
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|f| f.into_path().ok())
+        .map(|p| {
+            st.allow(&p);
+            p.to_string_lossy().into_owned()
+        })
+        .collect())
+}
+
+/// Scans the folders the user picked in "Quét tuỳ chọn". The window may only name folders the
+/// picker returned.
+#[tauri::command]
+fn scan_folders(app: AppHandle, folders: Vec<String>) -> Result<(), String> {
+    if folders.is_empty() {
+        return Err("no_folders".into());
+    }
+    let st = app.state::<AppState>();
+    let dirs = folders.iter().map(|f| st.allowed(f)).collect::<Result<Vec<_>, _>>()?;
+    start_scan(app.clone(), Scope::Folders(dirs))
 }
 
 /// "Dừng": the running scan ends before its next folder and reports what it found so far.
@@ -463,7 +485,10 @@ fn start_scan(app: AppHandle, scope: Scope) -> Result<(), String> {
                 Some(genra_av_core::scanner::DEEP),
                 None,
             ),
-            Scope::Folder(dir) => ("folder", vec![dir.clone()], Vec::new(), Some(genra_av_core::scanner::DEEP), Some(dir)),
+            Scope::Folders(dirs) => {
+                let dirs = genra_av_core::targets::outermost(dirs);
+                ("folder", dirs.clone(), Vec::new(), Some(genra_av_core::scanner::DEEP), Some(dirs))
+            }
         };
         if folder.is_none() {
             roots.extend(genra_av_core::targets::removable_volumes());
@@ -498,7 +523,7 @@ fn start_scan(app: AppHandle, scope: Scope) -> Result<(), String> {
             kind: Kind::QuickScan,
             // "" for the quick scan (older entries have it too), else `full` / `folder`.
             name: if label == "quick" { String::new() } else { label.to_string() },
-            path: folder.map(|d| d.to_string_lossy().into_owned()),
+            path: folder.as_ref().and_then(|d| d.first()).map(|d| d.to_string_lossy().into_owned()),
             verdict: result.hits.iter().filter_map(|h| h.report.verdict).max(),
             family: None,
             files: Some(result.files_seen),
@@ -506,6 +531,7 @@ fn start_scan(app: AppHandle, scope: Scope) -> Result<(), String> {
             undo: None,
             undone: false,
             stopped: result.stopped,
+            folders: folder.map(|d| d.len() as u32).unwrap_or(0),
             items: result.hits.iter().take(history::MAX_ITEMS).map(hit_item).collect(),
         });
         st.quick_running.store(false, Ordering::SeqCst);
@@ -603,6 +629,7 @@ async fn fix_health(app: AppHandle, fix: machine::FixId) -> Result<genra_av_mach
             undo: Some(Undo::Group { id: report.group_id.clone() }),
             undone: false,
             stopped: false,
+            folders: 0,
             items: Vec::new(),
         });
     }
@@ -640,6 +667,7 @@ async fn disable_startup(app: AppHandle, id: String) -> Result<genra_av_machine:
             undo: Some(Undo::Group { id: report.group_id.clone() }),
             undone: false,
             stopped: false,
+            folders: 0,
             items: Vec::new(),
         });
     }
@@ -885,7 +913,8 @@ pub fn run() {
             undo,
             history,
             quick_scan,
-            scan_folder,
+            pick_folders,
+            scan_folders,
             stop_scan,
             recheck_hit,
             reveal,

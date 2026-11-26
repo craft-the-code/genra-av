@@ -65,6 +65,8 @@ const state = {
   history: null as api.HistoryView | null,
   historyAll: false,
   hitsAll: false,
+  /** "Quét tuỳ chọn": the whole computer, or the folders picked (removable with ×). */
+  custom: { open: false, full: false, folders: [] as string[] },
   machine: null as api.MachineOverview | null,
   machineLoading: false,
   machineError: "",
@@ -239,9 +241,11 @@ function entryScope(e: api.Entry): ScanScope {
   return e.path ? "folder" : e.name === "full" ? "full" : "quick";
 }
 
-function safeText(scope: ScanScope, folder: string, at: number, files: number): string {
-  const args = { when: t("time.at", { time: fmtWhen(at) }), files: nf(files), folder: shortFolder(folder) };
-  return t(scope === "full" ? "band.safe.full" : scope === "folder" ? "band.safe.folder" : "band.safe.text", args);
+function safeText(scope: ScanScope, folder: string, at: number, files: number, folders = 1): string {
+  const args = { when: t("time.at", { time: fmtWhen(at) }), files: nf(files), folder: shortFolder(folder), n: folders };
+  const key =
+    scope === "full" ? "band.safe.full" : scope === "folder" ? (folders > 1 ? "band.safe.folders" : "band.safe.folder") : "band.safe.text";
+  return t(key, args);
 }
 
 function band(): string {
@@ -303,7 +307,7 @@ function band(): string {
       ok = true;
       tn = "ok";
       title = t("band.safe.title");
-      text = [safeText(entryScope(last), last.path ?? "", last.at, last.files ?? 0)];
+      text = [safeText(entryScope(last), last.path ?? "", last.at, last.files ?? 0, last.folders ?? 1)];
       action = secondary("quick", t("band.scan"));
     } else {
       title = t("band.never.title");
@@ -313,12 +317,10 @@ function band(): string {
   }
   if (q.error) text.push(t("band.error", { detail: q.error }));
   // The usual scan stays the one button; the wider ones sit beside it as quiet links.
-  const more = q.running
-    ? ""
-    : `<div class="band-more">
-        <button class="link on-dark" data-action="scan-full" data-fid="band-full">${esc(t("band.full"))}</button>
-        <button class="link on-dark" data-action="scan-folder" data-fid="band-folder">${esc(t("band.folder"))}</button>
-      </div>`;
+  const more =
+    q.running || state.custom.open
+      ? ""
+      : `<div class="band-more"><button class="link on-dark" data-action="custom-open" data-fid="band-custom">${esc(t("band.custom"))}</button></div>`;
   const glyph =
     tn === "busy"
       ? '<div class="band-spinner" aria-hidden="true"></div>'
@@ -347,6 +349,36 @@ function openItems(e: api.Entry): api.HitItem[] {
       .map((x) => x.path as string),
   );
   return (e.items ?? []).filter((i) => !dealt.has(i.path) && !state.quick.handled.has(i.path));
+}
+
+/** "Quét tuỳ chọn": the whole computer, or folders the user picks (several at once). */
+function customCard(): string {
+  const c = state.custom;
+  if (!c.open || state.quick.running) return "";
+  const rows = c.folders
+    .map(
+      (f, i) => `<li class="row">${line("folder", 18)}<div class="row-text"><div class="row-name">${esc(baseName(f) || f)}</div><div class="row-sub">${esc(shortFolder(f))}</div></div>
+        <button class="icon-btn" data-action="custom-remove" data-path="${esc(f)}" data-fid="custom-x-${i}" aria-label="${esc(t("custom.remove", { folder: baseName(f) || f }))}">${line("x", 16)}</button></li>`,
+    )
+    .join("");
+  const ready = c.full || c.folders.length > 0;
+  return `<section class="card custom" aria-labelledby="custom-title">
+    <h2 class="overline" id="custom-title">${esc(t("custom.title"))}</h2>
+    <label class="check">
+      <input type="checkbox" name="custom_full" ${c.full ? "checked" : ""} data-fid="custom-full">
+      <span><strong>${esc(t("custom.full"))}</strong><span class="row-sub">${esc(t("custom.full.hint"))}</span></span>
+    </label>
+    ${
+      c.full
+        ? ""
+        : `${rows ? `<ul class="rows">${rows}</ul>` : `<p class="empty">${esc(t("custom.empty"))}</p>`}
+      <button class="link with-icon" data-action="custom-add" data-fid="custom-add">${line("plus", 16)}${esc(t("custom.add"))}</button>`
+    }
+    <div class="actions">
+      <button class="btn primary" data-action="custom-start" data-fid="custom-start" ${ready ? "" : "disabled"}>${esc(t("custom.start"))}</button>
+      <button class="btn" data-action="custom-close" data-fid="custom-close">${esc(t("custom.close"))}</button>
+    </div>
+  </section>`;
 }
 
 /** "Tệp tìm thấy": every file the quick scan found, each one press from its own result. */
@@ -448,7 +480,9 @@ function historyRows(): Row[] {
             entryScope(e) === "full"
               ? t("history.full")
               : entryScope(e) === "folder"
-                ? t("history.folder", { folder: shortFolder(e.path ?? "") })
+                ? (e.folders ?? 1) > 1
+                  ? t("history.folders", { n: e.folders ?? 0 })
+                  : t("history.folder", { folder: shortFolder(e.path ?? "") })
                 : t("history.quick"),
           sub: `${t(hits ? "history.quick.hits" : e.stopped ? "history.quick.stopped" : "history.quick.safe", { files: nf(e.files ?? 0), hits })} · ${when}`,
         };
@@ -514,6 +548,7 @@ function overview(): string {
   return `<h1 tabindex="-1">${esc(t("overview.title"))}</h1>
     ${noticeBlock()}
     ${band()}
+    ${customCard()}
     ${hitsCard()}
     ${historyCard()}
     <p class="hint">${esc(t("hint.drop"))}</p>`;
@@ -1290,17 +1325,9 @@ async function startQuick(scope: ScanScope = "quick") {
     render();
   };
   try {
-    if (scope === "folder") {
-      // Running from the start, so a tiny folder's "done" cannot arrive before the band switches.
-      begin();
-      if (!(await api.scanFolder())) {
-        state.quick.running = false;
-        render();
-      }
-    } else {
-      begin();
-      await api.quickScan(scope);
-    }
+    begin();
+    if (scope === "folder") await api.scanFolders(state.custom.folders);
+    else await api.quickScan(scope);
   } catch (e) {
     if (String(e) !== "busy") {
       state.quick.running = false;
@@ -1362,11 +1389,30 @@ root.addEventListener("click", (ev) => {
     case "quick":
       void startQuick();
       break;
-    case "scan-full":
-      void startQuick("full");
+    case "custom-open":
+      state.custom.open = true;
+      render();
       break;
-    case "scan-folder":
-      void startQuick("folder");
+    case "custom-close":
+      state.custom.open = false;
+      render();
+      break;
+    case "custom-add":
+      api.pickFolders().then(
+        (picked) => {
+          for (const f of picked) if (!state.custom.folders.includes(f)) state.custom.folders.push(f);
+          render();
+        },
+        () => render(),
+      );
+      break;
+    case "custom-remove":
+      state.custom.folders = state.custom.folders.filter((f) => f !== el.dataset.path);
+      render();
+      break;
+    case "custom-start":
+      state.custom.open = false;
+      void startQuick(state.custom.full ? "full" : "folder");
       break;
     case "stop-scan":
       state.quick.stopping = true;
@@ -1490,6 +1536,9 @@ root.addEventListener("change", (ev) => {
   } else if (el.name === "lang") {
     setLang(el.value as Lang);
     store("genra.lang", el.value);
+    render();
+  } else if (el.name === "custom_full") {
+    state.custom.full = el.checked;
     render();
   } else if (el.name === "send_hashes") {
     void api.setSendHashes(el.checked).then(
