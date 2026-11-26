@@ -1,0 +1,75 @@
+# Builds and signs the rule pack every 6 hours and publishes it on the rolling `rules-latest`
+# release. Known-bad hashes accumulate: each run merges abuse.ch MalwareBazaar's last-48-hours
+# export into the list published by the previous run. See ADR 0002 and docs/release-plan.md.
+name: rule-pack
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["rules/**", "keys/**", "scripts/build-pack.py", ".github/workflows/rule-pack.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rule-pack
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the CLI
+        run: cargo build --release --locked -p genra-av
+
+      - name: Previous hash list
+        run: |
+          mkdir -p out
+          if gh release download rules-latest -p 'malwarebazaar.txt.gz' -D prev 2>/dev/null; then
+            gunzip -c prev/malwarebazaar.txt.gz > prev.txt
+          else
+            : > prev.txt
+          fi
+          echo "previous: $(wc -l < prev.txt) hashes"
+
+      - name: MalwareBazaar recent additions (48 h)
+        env:
+          ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
+        run: |
+          curl -sSf --retry 3 -A "genra-av-ci" \
+            "https://mb-api.abuse.ch/v2/files/exports/${ABUSECH_AUTH_KEY}/recent.csv" -o recent.csv
+          python3 scripts/extract-sha256.py < recent.csv > recent.txt
+          echo "recent: $(wc -l < recent.txt) hashes"
+          test -s recent.txt
+
+      - name: Merge, build and sign
+        env:
+          SIGNING_KEY: ${{ secrets.GENRA_PACK_SIGNING_KEY }}
+        run: |
+          sort -u prev.txt recent.txt > out/malwarebazaar.txt
+          echo "total: $(wc -l < out/malwarebazaar.txt) hashes"
+          ./target/release/genra-av hashes build out/malwarebazaar.txt out/malwarebazaar.bin
+          python3 scripts/build-pack.py rules/base.json out/malwarebazaar.bin out/pack.json
+          umask 077
+          printf '%s' "$SIGNING_KEY" > "$RUNNER_TEMP/pack.key"
+          ./target/release/genra-av rules sign out/pack.json --key "$RUNNER_TEMP/pack.key"
+          rm -f "$RUNNER_TEMP/pack.key"
+          ./target/release/genra-av rules verify out/pack.json --pubkey keys/pack-1.pub
+          ./target/release/genra-av scan --rules out/pack.json --pubkey keys/pack-1.pub README.md
+          gzip -9 -k out/malwarebazaar.txt
+
+      - name: Publish on rules-latest
+        run: |
+          gh release view rules-latest >/dev/null 2>&1 || \
+            gh release create rules-latest --prerelease --title "Rule pack (rolling)" \
+              --notes "Signed rule pack, rebuilt every 6 hours. Apps download pack.json, pack.json.sig and malwarebazaar.bin from here; the pack's signature covers the hash list."
+          gh release upload rules-latest --clobber \
+            out/pack.json out/pack.json.sig out/malwarebazaar.bin out/malwarebazaar.txt.gz
