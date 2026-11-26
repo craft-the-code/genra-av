@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "version": 2026112601,
+  "published": "2026-11-26",
+  "rules": [
+    {
+      "id": "GENRA.Office.Kangatang.A",
+      "family": "Kangatang",
+      "severity": "malware",
+      "message_vi": "Sâu macro Kangatang: tự chép vào thư mục khởi động Excel (XLSTART\\mypersonnel.xls), lây sang mọi sổ được mở và đổi .xlsx thành .xls. Không mở tệp này bằng Excel; dọn máy theo hướng dẫn.",
+      "when": {
+        "vba_source_all": ["mypersonnel.xls", "OnSheetActivate"]
+      }
+    },
+    {
+      "id": "GENRA.Office.Kangatang.Module",
+      "family": "Kangatang",
+      "severity": "malware",
+      "message_vi": "Có module VBA tên Kangatang (biến thể sâu Kangatang).",
+      "when": {
+        "vba_module_name_any": ["Kangatang"]
+      }
+    },
+    {
+      "id": "GENRA.Office.Downloader.Generic",
+      "family": "downloader",
+      "severity": "malware",
+      "message_vi": "Macro tải và chạy chương trình từ Internet.",
+      "when": {
+        "vba_source_any": ["URLDownloadToFile", "MSXML2.XMLHTTP", "WinHttp.WinHttpRequest"],
+        "vba_source_all": ["Shell"]
+      }
+    }
+  ],
+  "allow_sha256": [],
+  "disabled": []
+}
