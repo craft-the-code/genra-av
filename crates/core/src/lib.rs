@@ -3,7 +3,11 @@
 
 pub mod extract;
 pub mod ovba;
+pub mod quarantine;
+pub mod reputation;
 pub mod rules;
+pub mod scanner;
+pub mod targets;
 
 use extract::{Kind, VbaModule};
 use rules::{Pack, Severity};
@@ -16,6 +20,9 @@ pub struct Finding {
     pub family: String,
     pub severity: Severity,
     pub message_vi: String,
+    /// Whether this finding on its own may move the file into quarantine. False for a match on
+    /// a public hash feed that is not marked `trusted` (anyone can upload a clean file there).
+    pub auto_quarantine: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +37,14 @@ pub struct Report {
     pub allowed: bool,
 }
 
+impl Report {
+    /// True when a rule, a built-in heuristic or a trusted hash list says malware. A hit on an
+    /// untrusted hash feed alone never quarantines.
+    pub fn should_quarantine(&self) -> bool {
+        self.findings.iter().any(|f| f.severity == Severity::Malware && f.auto_quarantine)
+    }
+}
+
 /// Macro entry points that run without the user asking (Office runs them on open/close).
 const AUTO_EXEC: &[&str] = &[
     "auto_open", "auto_close", "autoopen", "autoclose", "autoexec", "workbook_open",
@@ -42,6 +57,11 @@ const REACHES_OUT: &[&str] = &[
 ];
 
 pub fn scan(bytes: &[u8], pack: Option<&Pack>) -> Report {
+    scan_with(bytes, pack, None)
+}
+
+/// Like [`scan`], and also looks the file's hash up in the pack's hash lists.
+pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputation::Reputation>) -> Report {
     let sha256 = hex::encode(Sha256::digest(bytes));
     let kind = extract::kind(bytes);
     let facts = extract::facts(bytes);
@@ -55,9 +75,19 @@ pub fn scan(bytes: &[u8], pack: Option<&Pack>) -> Report {
                     family: rule.family.clone(),
                     severity: rule.severity,
                     message_vi: rule.message_vi.clone(),
+                    auto_quarantine: true,
                 });
             }
         }
+    }
+    if let Some(hit) = reputation.and_then(|r| r.lookup(&sha256)) {
+        findings.push(Finding {
+            rule: format!("hash.{}", hit.file.trim_end_matches(".bin")),
+            family: hit.family.clone(),
+            severity: hit.severity,
+            message_vi: format!("Tệp này khớp với mã độc đã biết ({}).", hit.source),
+            auto_quarantine: hit.trusted,
+        });
     }
     findings.extend(builtin(&facts));
 
@@ -109,6 +139,7 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
             family: "macro".into(),
             severity: Severity::Suspicious,
             message_vi: "Tệp có macro nhưng không đọc được mã: không nên mở bằng Excel/Word.".into(),
+            auto_quarantine: true,
         });
     }
     if facts.vba.is_empty() {
@@ -125,6 +156,6 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
         ),
         _ => ("builtin.macro_present", Severity::Info, "Tệp có macro VBA."),
     };
-    out.push(Finding { rule: rule.into(), family: "macro".into(), severity, message_vi: msg.into() });
+    out.push(Finding { rule: rule.into(), family: "macro".into(), severity, message_vi: msg.into(), auto_quarantine: true });
     out
 }
