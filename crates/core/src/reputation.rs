@@ -62,6 +62,18 @@ impl HashList {
 #[derive(Default)]
 pub struct Reputation {
     lists: Vec<(HashSetRef, HashList)>,
+    fingerprint: String,
+}
+
+/// Identifies a set of lists by their content and how a match is treated, so the scan cache can
+/// tell when a file checked earlier must be looked up again.
+fn fingerprint(lists: &[(HashSetRef, HashList)]) -> String {
+    let mut h = Sha256::new();
+    for (r, l) in lists {
+        h.update(Sha256::digest(l.digests.concat()));
+        h.update(format!("{:?}{}", r.severity, r.trusted).as_bytes());
+    }
+    hex::encode(h.finalize())
 }
 
 impl Reputation {
@@ -78,13 +90,23 @@ impl Reputation {
             if !actual.eq_ignore_ascii_case(&r.sha256) {
                 bail!("hash list {} does not match the digest in the pack", r.file);
             }
-            lists.push((r.clone(), HashList::from_bytes(&bytes)?));
+            let list = HashList::from_bytes(&bytes)?;
+            if r.count.is_some_and(|c| c != list.len() as u64) {
+                bail!("hash list {} has {} entries, the pack says {}", r.file, list.len(), r.count.unwrap_or(0));
+            }
+            lists.push((r.clone(), list));
         }
-        Ok(Reputation { lists })
+        Ok(Reputation::from_lists(lists))
     }
 
     pub fn from_lists(lists: Vec<(HashSetRef, HashList)>) -> Reputation {
-        Reputation { lists }
+        let fingerprint = fingerprint(&lists);
+        Reputation { lists, fingerprint }
+    }
+
+    /// Changes whenever any list's content or treatment changes.
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
     }
 
     pub fn entries(&self) -> usize {

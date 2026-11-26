@@ -369,6 +369,7 @@ dependencies = [
  "anyhow",
  "cfb",
  "ed25519-dalek",
+ "getrandom",
  "hex",
  "serde",
  "serde_json",

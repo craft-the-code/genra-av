@@ -13,7 +13,11 @@ const INTERESTING: &[&str] = &[
 ];
 
 /// Folders that never hold user-received threats and are large: skipped while walking.
-const SKIP_DIRS: &[&str] = &["node_modules", ".git", "$recycle.bin", "system volume information", "library"];
+const SKIP_DIRS: &[&str] = &["node_modules", ".git", "$recycle.bin", "system volume information"];
+
+/// Folders whose every file an Office app loads at start, whatever its name or extension
+/// (Excel opens `XLSTART\PERSONAL` with no extension). Every file in them is scanned.
+const STARTUP_DIRS: &[&str] = &["xlstart"];
 
 pub fn interesting(path: &Path) -> bool {
     path.extension()
@@ -22,9 +26,38 @@ pub fn interesting(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn skip_dir(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    SKIP_DIRS.contains(&n.as_str()) || (n.starts_with('.') && n.len() > 1)
+/// True when `path` sits in an Office startup folder (see `STARTUP_DIRS`), at any depth.
+pub fn in_startup_folder(path: &Path) -> bool {
+    path.parent()
+        .into_iter()
+        .flat_map(|p| p.components())
+        .any(|c| c.as_os_str().to_str().is_some_and(|s| STARTUP_DIRS.contains(&s.to_ascii_lowercase().as_str())))
+}
+
+/// Folders the quick scan does not walk into: heavy tool folders, hidden folders (the Hidden
+/// attribute on Windows, a leading dot on Unix), and on macOS only `~/Library` itself.
+pub fn skip_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    if skip_dir_name(name) || is_hidden(path) {
+        return true;
+    }
+    cfg!(target_os = "macos") && home().is_some_and(|h| path == h.join("Library"))
+}
+
+fn skip_dir_name(name: &str) -> bool {
+    SKIP_DIRS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+#[cfg(windows)]
+fn is_hidden(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0)
+}
+
+#[cfg(not(windows))]
+fn is_hidden(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.') && n.len() > 1)
 }
 
 fn home() -> Option<PathBuf> {
@@ -127,8 +160,32 @@ mod tests {
 
     #[test]
     fn skips_heavy_and_hidden_dirs() {
-        assert!(skip_dir("node_modules"));
-        assert!(skip_dir(".cache"));
-        assert!(!skip_dir("Zalo Received Files"));
+        assert!(skip_dir(Path::new("/x/node_modules")));
+        assert!(!skip_dir(Path::new("/x/Zalo Received Files")));
+        // A folder merely named "library" (a school's, an office's) is walked.
+        assert!(!skip_dir(Path::new("/x/Library")));
+        assert!(!skip_dir(Path::new("/x/library")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hides_dot_folders_on_unix() {
+        assert!(skip_dir(Path::new("/x/.cache")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn skips_only_the_home_library_on_macos() {
+        let h = home().unwrap();
+        assert!(skip_dir(&h.join("Library")));
+        assert!(!skip_dir(&h.join("Documents").join("Library")));
+    }
+
+    #[test]
+    fn every_file_in_xlstart_counts() {
+        assert!(in_startup_folder(Path::new("/u/AppData/Roaming/Microsoft/Excel/XLSTART/PERSONAL")));
+        assert!(in_startup_folder(Path::new("/u/Excel/xlstart/sub/book.dat")));
+        assert!(!in_startup_folder(Path::new("/u/Downloads/PERSONAL")));
+        assert!(!in_startup_folder(Path::new("/u/XLSTART")), "the folder itself is not inside it");
     }
 }

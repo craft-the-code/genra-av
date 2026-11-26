@@ -20,6 +20,9 @@ pub struct Finding {
     pub family: String,
     pub severity: Severity,
     pub message_vi: String,
+    /// Whether this finding on its own may move the file into quarantine. False for a match on
+    /// a public hash feed that is not marked `trusted` (anyone can upload a clean file there).
+    pub auto_quarantine: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,6 +35,14 @@ pub struct Report {
     pub verdict: Option<Severity>,
     /// The file's hash is on the pack's allow list, so rule matches were dropped.
     pub allowed: bool,
+}
+
+impl Report {
+    /// True when a rule, a built-in heuristic or a trusted hash list says malware. A hit on an
+    /// untrusted hash feed alone never quarantines.
+    pub fn should_quarantine(&self) -> bool {
+        self.findings.iter().any(|f| f.severity == Severity::Malware && f.auto_quarantine)
+    }
 }
 
 /// Macro entry points that run without the user asking (Office runs them on open/close).
@@ -64,6 +75,7 @@ pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputati
                     family: rule.family.clone(),
                     severity: rule.severity,
                     message_vi: rule.message_vi.clone(),
+                    auto_quarantine: true,
                 });
             }
         }
@@ -74,6 +86,7 @@ pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputati
             family: hit.family.clone(),
             severity: hit.severity,
             message_vi: format!("Tệp này khớp với mã độc đã biết ({}).", hit.source),
+            auto_quarantine: hit.trusted,
         });
     }
     findings.extend(builtin(&facts));
@@ -126,6 +139,7 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
             family: "macro".into(),
             severity: Severity::Suspicious,
             message_vi: "Tệp có macro nhưng không đọc được mã: không nên mở bằng Excel/Word.".into(),
+            auto_quarantine: true,
         });
     }
     if facts.vba.is_empty() {
@@ -142,6 +156,6 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
         ),
         _ => ("builtin.macro_present", Severity::Info, "Tệp có macro VBA."),
     };
-    out.push(Finding { rule: rule.into(), family: "macro".into(), severity, message_vi: msg.into() });
+    out.push(Finding { rule: rule.into(), family: "macro".into(), severity, message_vi: msg.into(), auto_quarantine: true });
     out
 }

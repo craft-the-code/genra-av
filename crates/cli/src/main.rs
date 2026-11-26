@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signer, SigningKey};
 use genra_av_core::quarantine::Quarantine;
 use genra_av_core::reputation::{HashList, Reputation};
-use genra_av_core::rules::{verifying_key_from_hex, Pack, Severity};
+use genra_av_core::rules::{verifying_key_from_hex, Pack, PackState, Severity};
 use genra_av_core::{scanner, targets};
 use std::path::{Path, PathBuf};
 
@@ -102,8 +102,8 @@ fn main() {
 fn run() -> Result<bool> {
     match Cli::parse().cmd {
         Cmd::Scan { paths, rules, pubkey, unsigned, json } => {
-            let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned)?;
-            let rep = load_reputation(pack.as_ref(), rules.as_deref())?;
+            let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned, true)?;
+            let rep = load_reputation(pack.as_ref(), rules.as_deref());
             describe(pack.as_ref(), &rep);
             if paths.is_empty() {
                 bail!("give at least one file or folder");
@@ -120,8 +120,8 @@ fn run() -> Result<bool> {
             Ok(found)
         }
         Cmd::QuickScan { rules, pubkey, unsigned, quarantine, also } => {
-            let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned)?;
-            let rep = load_reputation(pack.as_ref(), rules.as_deref())?;
+            let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned, true)?;
+            let rep = load_reputation(pack.as_ref(), rules.as_deref());
             describe(pack.as_ref(), &rep);
             let mut roots = targets::quick_targets();
             roots.extend(targets::removable_volumes());
@@ -129,24 +129,32 @@ fn run() -> Result<bool> {
             for r in &roots {
                 eprintln!("target: {}", r.display());
             }
-            let data = data_dir();
+            let data = data_dir()?;
             std::fs::create_dir_all(&data)?;
             let cache_path = data.join("scan-cache.json");
-            let mut ctx = scanner::Context { pack: pack.as_ref(), reputation: Some(&rep), cache: scanner::Cache::load(&cache_path) };
+            let mut ctx = scanner::Context::new(pack.as_ref(), Some(&rep), scanner::Cache::load(&cache_path));
             let started = std::time::Instant::now();
             let summary = scanner::walk(&mut ctx, &roots, |_| {});
             ctx.cache.save(&cache_path)?;
             eprintln!(
-                "seen {} files, read {}, remembered {}, too large {}, in {:.1} s",
-                summary.files_seen, summary.files_read, summary.files_cached, summary.skipped_large,
+                "seen {} files, read {}, remembered {}, rechecked by hash {}, too large {}, in {:.1} s",
+                summary.files_seen, summary.files_read, summary.files_cached, summary.files_rechecked, summary.skipped_large,
                 started.elapsed().as_secs_f32()
             );
             let q = if quarantine { Some(Quarantine::open(data.join("quarantine"))?) } else { None };
             for hit in &summary.hits {
                 print_report(&hit.path, &hit.report);
-                if let (Some(q), Some(Severity::Malware)) = (&q, hit.report.verdict) {
-                    let reason = hit.report.findings.first().map(|f| f.family.clone()).unwrap_or_default();
-                    match q.put(&hit.path, &reason) {
+                // Only a reviewed rule, a heuristic or a trusted hash list moves a file; a match
+                // on a public hash feed alone is reported and left in place.
+                if let (Some(q), true) = (&q, hit.report.should_quarantine()) {
+                    let reason = hit
+                        .report
+                        .findings
+                        .iter()
+                        .find(|f| f.severity == Severity::Malware && f.auto_quarantine)
+                        .map(|f| f.family.clone())
+                        .unwrap_or_default();
+                    match q.put(&hit.path, &hit.report.sha256, &reason) {
                         Ok(item) => println!("        → quarantined as {}", item.id),
                         Err(e) => println!("        → could not quarantine: {e:#}"),
                     }
@@ -155,7 +163,7 @@ fn run() -> Result<bool> {
             Ok(!summary.hits.is_empty())
         }
         Cmd::Quarantine(cmd) => {
-            let q = Quarantine::open(data_dir().join("quarantine"))?;
+            let q = Quarantine::open(data_dir()?.join("quarantine"))?;
             match cmd {
                 QuarantineCmd::List => {
                     for i in q.list()? {
@@ -201,7 +209,7 @@ fn run() -> Result<bool> {
             Ok(false)
         }
         Cmd::Rules(RulesCmd::Verify { pack, pubkey }) => {
-            let p = load_pack(Some(&pack), Some(&pubkey), false)?.expect("pack given");
+            let p = load_pack(Some(&pack), Some(&pubkey), false, false)?.expect("pack given");
             eprintln!("ok: version {}, {} rules, signature valid", p.version, p.rules.len());
             Ok(false)
         }
@@ -214,7 +222,9 @@ fn sig_path(pack: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn load_pack(path: Option<&Path>, pubkey: Option<&Path>, unsigned: bool) -> Result<Option<Pack>> {
+/// Loads a pack. A signed pack must verify and be unexpired; with `remember`, it must also be
+/// newer than (or identical to) the highest version this install accepted, which is then saved.
+fn load_pack(path: Option<&Path>, pubkey: Option<&Path>, unsigned: bool, remember: bool) -> Result<Option<Pack>> {
     let Some(path) = path else { return Ok(None) };
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     if unsigned {
@@ -224,27 +234,54 @@ fn load_pack(path: Option<&Path>, pubkey: Option<&Path>, unsigned: bool) -> Resu
     let pubkey = pubkey.context("--pubkey is required unless --unsigned")?;
     let key = verifying_key_from_hex(&std::fs::read_to_string(pubkey)?)?;
     let sig = std::fs::read_to_string(sig_path(path)).context("missing <pack>.sig")?;
-    Ok(Some(Pack::verified(&bytes, &sig, &[key])?))
-}
-
-/// Where Genra keeps its cache and quarantine; the desktop app uses the same place.
-fn data_dir() -> PathBuf {
-    let home = || std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default();
-    if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(home).join("Genra AV")
-    } else if cfg!(target_os = "macos") {
-        home().join("Library/Application Support/Genra AV")
-    } else {
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share")).join("genra-av")
+    let pack = Pack::verified(&bytes, &sig, &[key])?;
+    if remember {
+        let data = data_dir()?;
+        std::fs::create_dir_all(&data)?;
+        PackState::accept(&data.join("pack-state.json"), &pack, &bytes)?;
     }
+    Ok(Some(pack))
 }
 
-/// Hash lists sit next to the pack JSON; the (verified) pack vouches for their digests.
-fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Result<Reputation> {
-    match (pack, rules.and_then(|r| r.parent())) {
+/// Where Genra keeps its cache, quarantine and pack state; the desktop app uses the same place.
+fn data_dir() -> Result<PathBuf> {
+    data_dir_from(|k| std::env::var_os(k))
+}
+
+/// [`data_dir`] with the environment passed in. Only absolute paths are taken: with no home
+/// folder this fails instead of quietly using the current directory.
+fn data_dir_from(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<PathBuf> {
+    let abs = |k: &str| env(k).map(PathBuf::from).filter(|p| p.is_absolute());
+    let home = || abs(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).context("no home folder (HOME/USERPROFILE unset or not absolute); cannot find the data folder");
+    Ok(if cfg!(windows) {
+        match abs("LOCALAPPDATA") {
+            Some(p) => p,
+            None => home()?.join("AppData").join("Local"),
+        }
+        .join("Genra AV")
+    } else if cfg!(target_os = "macos") {
+        home()?.join("Library/Application Support/Genra AV")
+    } else {
+        match abs("XDG_DATA_HOME") {
+            Some(p) => p,
+            None => home()?.join(".local/share"),
+        }
+        .join("genra-av")
+    })
+}
+
+/// Hash lists sit next to the pack JSON; the (verified) pack vouches for their digests. A list
+/// that is missing or does not match (half-finished download, publish in progress) does not
+/// stop the scan: it warns and goes on with rules and heuristics only.
+fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Reputation {
+    let loaded = match (pack, rules.and_then(|r| r.parent())) {
         (Some(p), Some(dir)) if !p.hash_sets.is_empty() => Reputation::load(p, if dir.as_os_str().is_empty() { Path::new(".") } else { dir }),
         _ => Ok(Reputation::default()),
-    }
+    };
+    loaded.unwrap_or_else(|e| {
+        eprintln!("warning: hash lists not loaded ({e:#}); scanning with rules and heuristics only");
+        Reputation::default()
+    })
 }
 
 fn describe(pack: Option<&Pack>, rep: &Reputation) {
@@ -295,5 +332,27 @@ fn print_report(path: &Path, report: &genra_av_core::Report) {
     if !report.vba_modules.is_empty() {
         let names: Vec<_> = report.vba_modules.iter().map(|m| format!("{} ({} B)", m.name, m.bytes)).collect();
         println!("        VBA modules: {}", names.join(", "));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn data_dir_needs_an_absolute_home() {
+        assert!(data_dir_from(|_| None).is_err(), "no HOME/USERPROFILE: error, not the cwd");
+        assert!(data_dir_from(|_| Some(OsString::from("relative"))).is_err());
+        let home = if cfg!(windows) { "C:\\Users\\a" } else { "/home/a" };
+        let d = data_dir_from(|k| (k == "HOME" || k == "USERPROFILE").then(|| OsString::from(home))).unwrap();
+        assert!(d.is_absolute() && d.starts_with(home), "{}", d.display());
+    }
+
+    #[test]
+    fn a_broken_hash_list_does_not_stop_the_scan() {
+        let pack = Pack::parse(br#"{"format":1,"version":1,"published":"x","hash_sets":[{"file":"missing.bin","sha256":"00","family":"f","source":"s"}]}"#).unwrap();
+        let rep = load_reputation(Some(&pack), Some(Path::new("/nonexistent/pack.json")));
+        assert_eq!(rep.entries(), 0);
     }
 }
