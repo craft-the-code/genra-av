@@ -37,3 +37,12 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   English; "Kiểm tra tệp" scans a dropped or chosen file with the bundled rules; "báo nhầm" sends a
   false-positive report (hash, rule id, note; never the file). Other screens show "Sắp có" states.
 - Brand, UX decisions, design tokens and v1 mock-ups (`docs/`).
+- Machine repair (`crates/machine`): "Dọn sạch giúp tôi" cleans the machine, not just the file. A
+  journal written before every change, one-press undo per repair (refused if a file changed since,
+  never overwrites), 30-day expiry. Fixed actions only: replace a file with its verified clean copy
+  (original quarantined), quarantine a file, remove a worm from Excel's startup folder, reset Office's
+  "enable all macros" (Windows, current user), switch off a user startup item. The plan for a Kangatang
+  hit (or a rule with `machine_persistence: xlstart`) also covers XLSTART and other infected workbooks.
+  Excel status and a polite close request; health (Defender/Gatekeeper, updates, firewall, Office
+  macros); startup items with signatures and verdicts. CLI: `genra-av machine health|startup|plan|
+  repair|journal|undo`.

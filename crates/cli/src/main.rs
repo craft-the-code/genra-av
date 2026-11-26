@@ -1,6 +1,8 @@
 //! genra-av: scan files and folders, and manage signed rule packs.
 //! Exit code: 0 nothing found, 1 a suspicious or malware finding, 2 an error.
 
+mod machine;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signer, SigningKey};
@@ -70,6 +72,9 @@ enum Cmd {
     /// Hash list tooling for whoever publishes packs.
     #[command(subcommand)]
     Hashes(HashesCmd),
+    /// Clean the machine, not just the file: health, startup items, repair plans, journal, undo.
+    #[command(subcommand)]
+    Machine(machine::MachineCmd),
 }
 
 #[derive(Subcommand)]
@@ -191,6 +196,7 @@ fn run() -> Result<bool> {
             }
             Ok(false)
         }
+        Cmd::Machine(cmd) => machine::run(cmd),
         Cmd::Hashes(HashesCmd::Dump { input }) => {
             use std::io::Write;
             let bytes = std::fs::read(&input).with_context(|| format!("reading {}", input.display()))?;
