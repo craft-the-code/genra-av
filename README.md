@@ -28,7 +28,9 @@ Exit code `0` nothing found, `1` suspicious or malware, `2` error. `--json` prin
   new pack in minutes; the app is not updated. See [ADR 0002](docs/adr/0002-signed-rule-packs.md).
 - Built-in heuristics (an auto-run macro that reaches outside the file) work with no pack at all.
 
-Plan: [ROADMAP.md](ROADMAP.md). Decisions: [docs/adr](docs/adr). Name and logo: [docs/brand.md](docs/brand.md).
+Plan: [ROADMAP.md](ROADMAP.md) and the big picture in [docs/strategy.md](docs/strategy.md). Decisions:
+[docs/adr](docs/adr). Name and logo: [docs/brand.md](docs/brand.md). Changes: [CHANGELOG.md](CHANGELOG.md).
+Security reports: [SECURITY.md](SECURITY.md).
 
 ## Samples
 

@@ -30,6 +30,8 @@ Open source since 26/11/2026: Apache-2.0, public on GitHub (moved up from P1, Ho
 
 ## P2 Desktop app (Windows first): the repair experience
 
+v0.1 ships P2 together with the quick scan, hash reputation and YARA-X part of P3 (docs/release-plan.md).
+
 The core experience is "Dọn giúp tôi" without breaking anything (docs/ux, core experience).
 
 - `genra-guard` background process (Rust, no UI) + Tauri 2 window opened on demand (ADR 0003);
@@ -44,9 +46,12 @@ The core experience is "Dọn giúp tôi" without breaking anything (docs/ux, co
 
 Exit: install-to-first-scan under 1 minute on an office PC; a pack reaches 90% of clients in 6 hours.
 
-## P3 Wider protection
+## P3 Wider protection (towards a full AV, see [docs/strategy.md](docs/strategy.md))
 
-- YARA-X rules for byte patterns beyond macros (scripts, LNK, HTA, malicious PDF, archives).
+- YARA-X rules and more parsers: archives, PDF, LNK, HTA and scripts, ISO/IMG, Windows PE.
+- Static ML on Windows executables (EMBER-trained, ONNX inside the pack).
+- Behaviour: process starts, script engines, persistence points, ransomware canaries.
+- `bench/` harness: detection and false-positive rates per pack; target ≥ 80% on 30-day-old samples, ≤ 0.1% FP.
 - Public hash feeds (e.g. MalwareBazaar) folded into packs, each feed's licence checked first.
 - macOS and Linux desktop builds; Android "check a file shared to Genra AV".
 - Opt-in report of hashes of detected files (never content), to see which families spread where.

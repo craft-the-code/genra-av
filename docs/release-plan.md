@@ -2,12 +2,23 @@
 
 Written 26/11/2026. Decisions marked (Hoan) are his; the rest are proposals until he says otherwise.
 
-## v0.1 beta: "Kiểm tra + Dọn sạch"
+## v0.1 beta: a real first release, not only Office files
 
-Scope (proposal): drag-and-drop file check; **Dọn sạch giúp tôi** (clean the file, remove the
-Kangatang worm from Excel's startup folder, clean other infected Excel files, verify); quarantine +
-undo 30 days; rule pack bundled in the app; signed app auto-update; Vietnamese + English; light theme.
-Not in v0.1: folder guard, rule updates over the CDN, health screen (→ v0.2).
+Scope (Hoan, 26/11): the first release must already feel like an antivirus.
+
+1. **Kiểm tra tệp + Dọn sạch giúp tôi**: drag-and-drop check; clean the file *and* the machine
+   (Kangatang and kin out of Excel's startup, other infected workbooks cleaned, verified); quarantine + undo 30 days.
+2. **Quét nhanh máy + danh tiếng hash**: Downloads, Desktop, Documents, Zalo received files, USB drives;
+   public malware hashes (e.g. abuse.ch MalwareBazaar) and YARA-X rules for scripts, LNK, HTA,
+   archives and PDF, all inside the signed pack.
+3. **Rà soát khởi động + dọn**: everything that starts with Windows (Run keys, Startup folders,
+   Scheduled Tasks, services, XLSTART, Office add-ins), suspicious ones flagged, removable with undo.
+4. **Sức khoẻ máy**: Defender on and up to date, Windows Update, Office macro setting, firewall, with "Sửa giúp tôi".
+5. **Canh gác thư mục + USB**: the `genra-guard` background process checks new files in those folders
+   and on USB insert, and notifies only when there is something to do.
+
+Plus: app auto-update, Vietnamese + English, light theme, report / false-positive button (backend live).
+Later (v0.2+): rule updates over the CDN between app releases, static ML on executables, behaviour layer.
 
 Audience: a small group of testers. Windows installer **unsigned** for the beta (SignPath applied for once CI builds exist),
 macOS signed + notarised (existing Apple Developer account).
@@ -30,16 +41,25 @@ and individual eligibility outside the US/Canada is unclear (Hoan, 26/11: too ex
 Builds: Linux and Windows in GitLab CI (shared Linux and Windows runners); macOS on Hoan's Mac
 until a macOS runner is worth paying for.
 
-## Downloads and backend: Cloudflare (proposal; installers move to GitHub Releases at v1.0)
+## Downloads: GitHub Releases (Hoan, 26/11)
 
-- **R2** public bucket behind `download.<domain>`: `/<version>/…` plus stable `/latest/windows`,
-  `/latest/macos`, `/latest/linux-appimage`, `/latest/linux-deb`, and the updater manifest.
-- **Worker + D1** at `api.<domain>`:
+- Every release is a GitHub Release with all installers, `SHA256SUMS`, build attestations and the
+  release notes copied from `CHANGELOG.md` (Keep a Changelog, SemVer).
+- Stable links for the landing page: `https://github.com/craft-the-code/genra-av/releases/latest/download/<file>`
+  with fixed file names per OS (`Genra-AV-Setup.exe`, `Genra-AV.msi`, `Genra-AV.dmg`, `Genra-AV.AppImage`, `genra-av.deb`).
+- The Tauri updater reads `latest.json` from the latest release.
+- Landing page: craftthecode.dev gets a Genra AV page with per-OS download buttons, changelog link,
+  **FAQ**, **privacy policy** and **terms**, once v0.1 is released.
+
+## Backend: Cloudflare (live since 26/11)
+
+- **Worker + D1 + R2** at `genra-api.craftthecode.dev` (`backend/`, PR #1):
   - `POST /v1/report`: bug / false positive. Hash, rule id, app version, OS, user note, optional email.
   - `POST /v1/sample`: sample for analysis, **only the extracted VBA project, never the document's
     cells** (officers' files hold personal data). Explicit consent per file, size cap, 90-day retention.
   - Rate limit per install id; no accounts.
-- Packs (`/packs/manifest.json`, signed) join the same bucket in v0.2.
+- Packs (`/packs/manifest.json`, signed) on R2 in v0.2.
+- Admin and insights: `/admin/*` behind Cloudflare Access (docs/strategy.md).
 
 Domain (Hoan, 26/11): use `craftthecode.dev` for now, first-level subdomains so Cloudflare's free
 certificate covers them: `genra-api.craftthecode.dev` (Worker), `genra-dl.craftthecode.dev` (R2).
