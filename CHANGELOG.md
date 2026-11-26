@@ -33,4 +33,7 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - Engine: zip input is bounded (256 MB decompressed, 20,000 entries, no duplicate or overlapping
   entries); anything unreadable is reported as `vba_unreadable`, never as clean.
 - Backend at `genra-api.craftthecode.dev`: false-positive / bug reports and VBA-only sample upload.
+- Desktop app shell (Tauri 2, `app/`): sidebar with six screens, light/dark/system theme, Vietnamese and
+  English; "Kiểm tra tệp" scans a dropped or chosen file with the bundled rules; "báo nhầm" sends a
+  false-positive report (hash, rule id, note; never the file). Other screens show "Sắp có" states.
 - Brand, UX decisions, design tokens and v1 mock-ups (`docs/`).
