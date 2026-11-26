@@ -251,7 +251,7 @@ jobs:
           dmgs=(target/universal-apple-darwin/release/bundle/dmg/*.dmg)
           [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected one dmg, found ${#dmgs[@]}"; exit 1; }
           dmg=${dmgs[0]}
-          codesign --sign "$APPLE_SIGNING_IDENTITY" --keychain "$GENRA_KEYCHAIN" --timestamp "$dmg"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --keychain "$GENRA_KEYCHAIN" --timestamp "$dmg"
           xcrun notarytool submit "$dmg" --key "$GENRA_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER" --wait --timeout 60m
           xcrun stapler staple "$dmg"
