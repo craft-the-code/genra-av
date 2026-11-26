@@ -4,14 +4,17 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signer, SigningKey};
+use genra_av_core::quarantine::Quarantine;
+use genra_av_core::reputation::{HashList, Reputation};
 use genra_av_core::rules::{verifying_key_from_hex, Pack, Severity};
+use genra_av_core::{scanner, targets};
 use std::path::{Path, PathBuf};
 
 /// Files above this are skipped: Office documents worth scanning are far smaller.
 const MAX_FILE: u64 = 200 * 1024 * 1024;
 
 #[derive(Parser)]
-#[command(name = "genra-av", version, about = "Genra AV: Office macro and document threat scanner")]
+#[command(name = "genra-av", version, about = "Genra AV: free antivirus scanner")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -35,9 +38,45 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Scan the places threats arrive: Downloads, Desktop, Documents, Zalo received files,
+    /// Excel startup folders and removable drives. Remembers clean files between runs.
+    QuickScan {
+        #[arg(long)]
+        rules: Option<PathBuf>,
+        #[arg(long)]
+        pubkey: Option<PathBuf>,
+        #[arg(long)]
+        unsigned: bool,
+        /// Move files found to be malware into quarantine (restorable for 30 days).
+        #[arg(long)]
+        quarantine: bool,
+        /// Also scan these folders.
+        #[arg(long = "also")]
+        also: Vec<PathBuf>,
+    },
+    /// Quarantined files: list, restore, purge expired.
+    #[command(subcommand)]
+    Quarantine(QuarantineCmd),
     /// Rule pack tooling for whoever publishes packs.
     #[command(subcommand)]
     Rules(RulesCmd),
+    /// Hash list tooling for whoever publishes packs.
+    #[command(subcommand)]
+    Hashes(HashesCmd),
+}
+
+#[derive(Subcommand)]
+enum QuarantineCmd {
+    List,
+    Restore { id: String },
+    /// Delete items older than 30 days.
+    Purge,
+}
+
+#[derive(Subcommand)]
+enum HashesCmd {
+    /// Text (one hex SHA-256 per line) -> sorted binary list for a pack; prints its SHA-256.
+    Build { input: PathBuf, out: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -64,11 +103,8 @@ fn run() -> Result<bool> {
     match Cli::parse().cmd {
         Cmd::Scan { paths, rules, pubkey, unsigned, json } => {
             let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned)?;
-            if let Some(p) = &pack {
-                eprintln!("rules: version {} ({} rules)", p.version, p.rules.len());
-            } else {
-                eprintln!("rules: none loaded, built-in heuristics only");
-            }
+            let rep = load_reputation(pack.as_ref(), rules.as_deref())?;
+            describe(pack.as_ref(), &rep);
             if paths.is_empty() {
                 bail!("give at least one file or folder");
             }
@@ -78,10 +114,65 @@ fn run() -> Result<bool> {
                     if !entry.file_type().is_file() {
                         continue;
                     }
-                    found |= scan_one(entry.path(), pack.as_ref(), json);
+                    found |= scan_one(entry.path(), pack.as_ref(), Some(&rep), json);
                 }
             }
             Ok(found)
+        }
+        Cmd::QuickScan { rules, pubkey, unsigned, quarantine, also } => {
+            let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned)?;
+            let rep = load_reputation(pack.as_ref(), rules.as_deref())?;
+            describe(pack.as_ref(), &rep);
+            let mut roots = targets::quick_targets();
+            roots.extend(targets::removable_volumes());
+            roots.extend(also);
+            for r in &roots {
+                eprintln!("target: {}", r.display());
+            }
+            let data = data_dir();
+            std::fs::create_dir_all(&data)?;
+            let cache_path = data.join("scan-cache.json");
+            let mut ctx = scanner::Context { pack: pack.as_ref(), reputation: Some(&rep), cache: scanner::Cache::load(&cache_path) };
+            let started = std::time::Instant::now();
+            let summary = scanner::walk(&mut ctx, &roots, |_| {});
+            ctx.cache.save(&cache_path)?;
+            eprintln!(
+                "seen {} files, read {}, remembered {}, too large {}, in {:.1} s",
+                summary.files_seen, summary.files_read, summary.files_cached, summary.skipped_large,
+                started.elapsed().as_secs_f32()
+            );
+            let q = if quarantine { Some(Quarantine::open(data.join("quarantine"))?) } else { None };
+            for hit in &summary.hits {
+                print_report(&hit.path, &hit.report);
+                if let (Some(q), Some(Severity::Malware)) = (&q, hit.report.verdict) {
+                    let reason = hit.report.findings.first().map(|f| f.family.clone()).unwrap_or_default();
+                    match q.put(&hit.path, &reason) {
+                        Ok(item) => println!("        → quarantined as {}", item.id),
+                        Err(e) => println!("        → could not quarantine: {e:#}"),
+                    }
+                }
+            }
+            Ok(!summary.hits.is_empty())
+        }
+        Cmd::Quarantine(cmd) => {
+            let q = Quarantine::open(data_dir().join("quarantine"))?;
+            match cmd {
+                QuarantineCmd::List => {
+                    for i in q.list()? {
+                        println!("{}  {}  {}  ({} B, {})", i.id, i.reason, i.original_path.display(), i.size, &i.sha256[..16]);
+                    }
+                }
+                QuarantineCmd::Restore { id } => println!("restored to {}", q.restore(&id)?.display()),
+                QuarantineCmd::Purge => println!("deleted {} expired item(s)", q.purge_expired()?),
+            }
+            Ok(false)
+        }
+        Cmd::Hashes(HashesCmd::Build { input, out }) => {
+            let bin = HashList::build_from_text(&std::fs::read_to_string(&input)?)?;
+            std::fs::write(&out, &bin)?;
+            use sha2::Digest;
+            eprintln!("wrote {} ({} hashes), sha256 {}", out.display(), bin.len() / 32, hex::encode(sha2::Sha256::digest(&bin)));
+            Ok(false)
         }
         Cmd::Rules(RulesCmd::Keygen { out }) => {
             let mut seed = [0u8; 32];
@@ -136,7 +227,34 @@ fn load_pack(path: Option<&Path>, pubkey: Option<&Path>, unsigned: bool) -> Resu
     Ok(Some(Pack::verified(&bytes, &sig, &[key])?))
 }
 
-fn scan_one(path: &Path, pack: Option<&Pack>, json: bool) -> bool {
+/// Where Genra keeps its cache and quarantine; the desktop app uses the same place.
+fn data_dir() -> PathBuf {
+    let home = || std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default();
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(home).join("Genra AV")
+    } else if cfg!(target_os = "macos") {
+        home().join("Library/Application Support/Genra AV")
+    } else {
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share")).join("genra-av")
+    }
+}
+
+/// Hash lists sit next to the pack JSON; the (verified) pack vouches for their digests.
+fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Result<Reputation> {
+    match (pack, rules.and_then(|r| r.parent())) {
+        (Some(p), Some(dir)) if !p.hash_sets.is_empty() => Reputation::load(p, if dir.as_os_str().is_empty() { Path::new(".") } else { dir }),
+        _ => Ok(Reputation::default()),
+    }
+}
+
+fn describe(pack: Option<&Pack>, rep: &Reputation) {
+    match pack {
+        Some(p) => eprintln!("rules: version {} ({} rules, {} known-bad hashes)", p.version, p.rules.len(), rep.entries()),
+        None => eprintln!("rules: none loaded, built-in heuristics only"),
+    }
+}
+
+fn scan_one(path: &Path, pack: Option<&Pack>, rep: Option<&Reputation>, json: bool) -> bool {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size > MAX_FILE {
         if !json {
@@ -151,7 +269,7 @@ fn scan_one(path: &Path, pack: Option<&Pack>, json: bool) -> bool {
             return false;
         }
     };
-    let report = genra_av_core::scan(&bytes, pack);
+    let report = genra_av_core::scan_with(&bytes, pack, rep);
     let bad = report.verdict.is_some_and(|v| v >= Severity::Suspicious);
     if json {
         let mut v = serde_json::to_value(&report).unwrap_or_default();
@@ -159,6 +277,11 @@ fn scan_one(path: &Path, pack: Option<&Pack>, json: bool) -> bool {
         println!("{v}");
         return bad;
     }
+    print_report(path, &report);
+    bad
+}
+
+fn print_report(path: &Path, report: &genra_av_core::Report) {
     let label = match report.verdict {
         Some(Severity::Malware) => "MALWARE",
         Some(Severity::Suspicious) => "SUSPECT",
@@ -173,5 +296,4 @@ fn scan_one(path: &Path, pack: Option<&Pack>, json: bool) -> bool {
         let names: Vec<_> = report.vba_modules.iter().map(|m| format!("{} ({} B)", m.name, m.bytes)).collect();
         println!("        VBA modules: {}", names.join(", "));
     }
-    bad
 }

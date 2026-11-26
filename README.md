@@ -16,6 +16,8 @@ UX decisions, tokens and mock-ups: [docs/ux/README.md](docs/ux/README.md). Relea
 cargo build --release
 ./target/release/genra-av scan <file-or-folder>                                 # built-in heuristics only
 ./target/release/genra-av scan --rules rules/base.json --unsigned <path>       # dev: unsigned pack
+./target/release/genra-av quick-scan                                           # Downloads, Desktop, Documents, Zalo, USB…
+./target/release/genra-av quarantine list
 ```
 
 Exit code `0` nothing found, `1` suspicious or malware, `2` error. `--json` prints one report per line.

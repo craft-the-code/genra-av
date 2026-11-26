@@ -22,6 +22,22 @@ pub struct Pack {
     /// Rule ids switched off without shipping a new rule set.
     #[serde(default)]
     pub disabled: Vec<String>,
+    /// Binary hash lists shipped beside this JSON (see `reputation`). Each is named with its
+    /// SHA-256, so the signature over this JSON covers them.
+    #[serde(default)]
+    pub hash_sets: Vec<HashSetRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HashSetRef {
+    /// Plain file name next to the pack, e.g. `malwarebazaar-recent.bin`.
+    pub file: String,
+    pub sha256: String,
+    /// Family label shown when a file matches, e.g. "Known malware (MalwareBazaar)".
+    pub family: String,
+    pub severity: Severity,
+    /// Where the hashes come from, e.g. "abuse.ch MalwareBazaar (CC0)".
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

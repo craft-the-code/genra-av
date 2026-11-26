@@ -3,7 +3,11 @@
 
 pub mod extract;
 pub mod ovba;
+pub mod quarantine;
+pub mod reputation;
 pub mod rules;
+pub mod scanner;
+pub mod targets;
 
 use extract::{Kind, VbaModule};
 use rules::{Pack, Severity};
@@ -42,6 +46,11 @@ const REACHES_OUT: &[&str] = &[
 ];
 
 pub fn scan(bytes: &[u8], pack: Option<&Pack>) -> Report {
+    scan_with(bytes, pack, None)
+}
+
+/// Like [`scan`], and also looks the file's hash up in the pack's hash lists.
+pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputation::Reputation>) -> Report {
     let sha256 = hex::encode(Sha256::digest(bytes));
     let kind = extract::kind(bytes);
     let facts = extract::facts(bytes);
@@ -58,6 +67,14 @@ pub fn scan(bytes: &[u8], pack: Option<&Pack>) -> Report {
                 });
             }
         }
+    }
+    if let Some(hit) = reputation.and_then(|r| r.lookup(&sha256)) {
+        findings.push(Finding {
+            rule: format!("hash.{}", hit.file.trim_end_matches(".bin")),
+            family: hit.family.clone(),
+            severity: hit.severity,
+            message_vi: format!("Tệp này khớp với mã độc đã biết ({}).", hit.source),
+        });
     }
     findings.extend(builtin(&facts));
 
