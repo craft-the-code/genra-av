@@ -5,7 +5,13 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-26
+
+First pre-release: Windows installers are not code-signed yet; macOS is signed and notarised.
+
 ### Added
+- App updates: the app checks the signed GitHub release feed and offers a one-press update.
+- Windows smoke test checklist (`docs/testing/windows-smoke.md`) run before a pre-release is promoted.
 - Engine: OLE2/OOXML reader, MS-OVBA decompression, VBA module extraction.
 - Signed rule packs (Ed25519) with an allow list and rule kill switch. Signed packs must carry
   `expires` (refused once past it), and the highest accepted version is kept in the data folder so
@@ -70,3 +76,6 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - Rules carry an optional `message_en` (old packs still load); every rule in `rules/base.json` has one
   and the built-in heuristics have English text. The app shows it when the window is in English.
 - A detected file that sits in Excel's startup folder is moved out of it, not cleaned in place.
+
+### Fixed
+- macOS: internal volumes such as Recovery are no longer listed as removable drives.

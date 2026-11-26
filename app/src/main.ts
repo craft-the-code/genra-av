@@ -42,6 +42,8 @@ const state = {
   page: "overview" as Page,
   theme: "light" as Theme,
   appVersion: "",
+  update: null as api.UpdateInfo | null,
+  updating: "idle" as "idle" | "busy" | "error",
   rules: null as api.RulesInfo | null,
   settings: { send_hashes: false } as api.Settings,
   scan: { status: "idle" } as ScanState,
@@ -189,6 +191,7 @@ function sidebar(): string {
     <nav aria-label="${esc(t("nav.label"))}"><ul class="nav">${items}</ul></nav>
     <div class="side-foot">
       <div class="line">${line("shield", 16)}<span>${esc(t("footer.guard"))}</span></div>
+      ${state.update ? `<button class="link footer-update" data-action="goto-update" data-fid="goto-update">${esc(t("update.footer", { version: state.update.version }))}</button>` : ""}
       <div class="line rules">${esc(rulesLine())}</div>
     </div>
   </aside>`;
@@ -855,6 +858,15 @@ function settingsPage(): string {
         }
       </section>
       <section class="card"><h3>${esc(t("settings.about"))}</h3><p class="muted flat">${esc(t("settings.about.text", { app: state.appVersion }))}</p>
+        ${
+          state.update
+            ? `<div class="update-row"><span class="row-text"><span class="toggle-title">${esc(t("update.available", { version: state.update.version }))}</span>
+            <span class="row-sub">${esc(state.updating === "error" ? t("update.failed") : t("update.text"))}</span></span>
+            <button class="btn primary" data-action="install-update" data-fid="install-update"${state.updating === "busy" ? " disabled" : ""}>${esc(
+              state.updating === "busy" ? t("update.installing") : t("update.install"),
+            )}</button></div>`
+            : ""
+        }
         <div class="actions links">${link("privacy", t("settings.privacy_link"))}${link("terms", t("settings.terms_link"))}${link("source", t("settings.source_link"))}</div>
       </section>
     </div>`;
@@ -1252,6 +1264,18 @@ root.addEventListener("click", (ev) => {
     case "copy-id":
       void copyInstallId();
       break;
+    case "goto-update":
+      state.page = "settings";
+      render(true);
+      break;
+    case "install-update":
+      state.updating = "busy";
+      render();
+      api.installUpdate().catch(() => {
+        state.updating = "error";
+        render();
+      });
+      break;
     case "band-clean": {
       const first = remainingHits()[0];
       if (first) {
@@ -1356,6 +1380,14 @@ async function start() {
   ]);
   Object.assign(state, { rules, appVersion: version, settings, history: hist, installId });
   render();
+  // Updates come from signed GitHub releases; a failed check (offline, no release yet) stays silent.
+  api
+    .checkUpdate()
+    .then((u) => {
+      state.update = u;
+      if (u) render();
+    })
+    .catch(() => {});
 
   const launched = await api.launchPath();
   if (launched) void scanPath(launched);

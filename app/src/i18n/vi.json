@@ -237,5 +237,11 @@
   "settings.install_id": "Mã cài đặt",
   "settings.install_id.text": "Dùng mã này khi muốn xin xoá dữ liệu Genra đã gửi.",
   "settings.install_id.copy": "Sao chép",
-  "settings.install_id.copied": "Đã sao chép"
+  "settings.install_id.copied": "Đã sao chép",
+  "update.available": "Có bản mới {version}",
+  "update.text": "Bản cập nhật có chữ ký của Genra. Genra tải về, cài đặt rồi tự mở lại.",
+  "update.install": "Cập nhật",
+  "update.installing": "Đang cập nhật…",
+  "update.failed": "Chưa cập nhật được. Kiểm tra mạng rồi thử lại.",
+  "update.footer": "Có bản mới {version}"
 }

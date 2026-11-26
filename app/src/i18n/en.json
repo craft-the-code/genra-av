@@ -237,5 +237,11 @@
   "settings.install_id": "Install ID",
   "settings.install_id.text": "Use this ID to ask for the data Genra received to be deleted.",
   "settings.install_id.copy": "Copy",
-  "settings.install_id.copied": "Copied"
+  "settings.install_id.copied": "Copied",
+  "update.available": "Version {version} is available",
+  "update.text": "A signed Genra update. Genra downloads it, installs it and reopens.",
+  "update.install": "Update",
+  "update.installing": "Updating…",
+  "update.failed": "The update did not install. Check the connection and try again.",
+  "update.footer": "Version {version} is available"
 }

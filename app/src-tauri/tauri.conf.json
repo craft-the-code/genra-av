@@ -37,5 +37,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBGNTZFOTk1Q0I0QTQ5RDkKUldUWlNVckxsZWxXRDhFRVV1R2k4SnY3cVJWUURUakp2VThCNk9wNWlzQjNxSHJ3WmIwMi9iRmMK",
+      "endpoints": [
+        "https://github.com/craft-the-code/genra-av/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
