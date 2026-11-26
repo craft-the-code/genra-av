@@ -29,6 +29,10 @@ the mark is graphite `#3A3F4A → #15171C`. The launch years 2026–2027 (Bính 
 *Thiên Hà Thủy* (Water), and Metal gives birth to Water: name → colour → year is one generating chain.
 Red (Fire, which melts Metal) is used only for alarms: `#E5484D`.
 
+The app UI (26/11) is graphite with one blue accent, Genra Lam `#2F6BEF` (Water: the Metal mark
+gives birth to the Water UI). Yellow and red stay reserved for warning and danger. Full tokens:
+[design/tokens.md](design/tokens.md).
+
 ## Files (`assets/brand`)
 
 | File | Use |

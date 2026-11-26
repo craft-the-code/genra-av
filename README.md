@@ -38,4 +38,4 @@ encrypted archive outside the repo (password `infected` by convention) and test 
 ## Licence
 
 Copyright © 2026 Hoan Le. All rights reserved for now (see [LICENSE](LICENSE)).
-The plan is an open-source licence (Apache-2.0 proposed) once P1 is done.
+It will be released under Apache-2.0 once P1 is done.

@@ -1,8 +1,8 @@
 # Genra AV roadmap
 
 Long game, small steps. Each phase ends with something a real person can use, and with an exit
-check that says whether to go on. No dates until Q1–Q4 in [docs/ux/README.md](docs/ux/README.md)
-are answered.
+check that says whether to go on. Q1–Q12 in [docs/ux/README.md](docs/ux/README.md) were answered on 26/11/2026; dates come with the
+screen mock-ups.
 
 ## P0 Engine prototype (done 26/11/2026)
 
@@ -16,7 +16,8 @@ Exit: a real Kangatang sample is caught as malware; clean `.docx` stays OK; a ta
 
 ## P1 UX locked, then the first thing people touch
 
-1. Answer the question series in `docs/ux/README.md`; review a clickable mock-up before any UI code.
+1. Mock-ups of the six screens in `docs/ux/README.md` (tokens in `docs/design/tokens.md`), reviewed
+   before any UI code. Question series answered 26/11.
 2. **Web file check**: the same core compiled to WebAssembly. Drop a file in the browser, it is
    checked on the device and never uploaded. Zero install, every OS, a link people can pass on Zalo.
 3. Server-side use: the core as a library/CLI for upload scanners in other products, next to ClamAV.
@@ -25,11 +26,15 @@ Exit: a real Kangatang sample is caught as malware; clean `.docx` stays OK; a ta
 6. Fuzzing (`cargo fuzz`) on the OLE and VBA parsers.
 
 Exit: 0 false positives on the clean corpus; people in 2 offices use the web check unprompted.
-Open-source decision is taken here (licence, public repo).
+Open-source step is taken here: Apache-2.0 (Q9), public repo.
 
-## P2 Desktop app (Windows first)
+## P2 Desktop app (Windows first): the repair experience
 
-- Native UI per Q4; scan on demand, drag and drop, right-click "Kiểm tra bằng Genra AV".
+The core experience is "Dọn giúp tôi" without breaking anything (docs/ux, core experience).
+
+- `genra-guard` background process (Rust, no UI) + Tauri 2 window opened on demand (ADR 0003);
+  Windows spike on a 4 GB PC checks the memory numbers first.
+- Scan on demand, drag and drop, right-click "Kiểm tra bằng Genra AV".
 - Watch the folders threats arrive in (Downloads, Zalo received files, XLSTART, USB drives) with
   OS file notifications, no kernel driver.
 - Repair: remove persistence (XLSTART worm workbooks, Office startup add-ins), with undo for 30 days.
