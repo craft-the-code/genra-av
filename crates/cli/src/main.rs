@@ -434,7 +434,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod clean_tests {
     use super::*;
 
     #[test]
