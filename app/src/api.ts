@@ -149,6 +149,9 @@ export const machineOverview = (refresh = false) => invoke<MachineOverview>("mac
 export const fixHealth = (fix: string) => invoke<RunReport>("fix_health", { fix });
 export const disableStartup = (id: string) => invoke<RunReport>("disable_startup", { id });
 export const installId = () => invoke<string>("get_install_id");
+export type UpdateInfo = { version: string; notes: string | null };
+export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
+export const installUpdate = () => invoke<void>("install_update");
 export const getSettings = () => invoke<Settings>("get_settings");
 export const setSendHashes = (on: boolean) => invoke<Settings>("set_send_hashes", { on });
 export const reportFalsePositive = (sha256: string, ruleId: string | null, note: string | null) =>

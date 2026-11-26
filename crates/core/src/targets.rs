@@ -107,12 +107,14 @@ pub fn removable_volumes() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        // Everything under /Volumes except the system volume (a link to /).
+        // Volumes under /Volumes that diskutil reports as external, removable or ejectable. The
+        // system volume (a link to /) and internal ones such as Recovery are not removable drives.
         std::fs::read_dir("/Volumes")
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
                     .map(|e| e.path())
                     .filter(|p| std::fs::canonicalize(p).map(|c| c != Path::new("/")).unwrap_or(false))
+                    .filter(|p| macos_is_removable(p))
                     .collect()
             })
             .unwrap_or_default()
@@ -126,6 +128,31 @@ pub fn removable_volumes() -> Vec<PathBuf> {
             .flat_map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()))
             .collect()
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_is_removable(volume: &Path) -> bool {
+    std::process::Command::new("/usr/sbin/diskutil")
+        .arg("info")
+        .arg(volume)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| diskutil_says_removable(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or(false)
+}
+
+/// Reads `diskutil info` text: a volume counts as removable when it is external, removable media
+/// or ejectable. Internal fixed volumes (Recovery, Preboot, a second internal disk) do not.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn diskutil_says_removable(info: &str) -> bool {
+    info.lines().any(|line| {
+        let Some((key, value)) = line.split_once(':') else { return false };
+        let (key, value) = (key.trim(), value.trim());
+        (key == "Device Location" && value == "External")
+            || (key == "Removable Media" && value == "Removable")
+            || (key == "Ejectable" && value == "Yes")
+    })
 }
 
 #[cfg(windows)]
@@ -147,6 +174,17 @@ fn windows_removable() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_external_or_removable_volumes_count_as_usb() {
+        let recovery = "   Device Location:           Internal\n   Removable Media:           Fixed\n   Ejectable:                 No\n";
+        let stick = "   Device Location:           External\n   Removable Media:           Removable\n   Ejectable:                 Yes\n";
+        let card = "   Removable Media:           Removable\n";
+        assert!(!diskutil_says_removable(recovery));
+        assert!(diskutil_says_removable(stick));
+        assert!(diskutil_says_removable(card));
+        assert!(!diskutil_says_removable(""));
+    }
 
     #[test]
     fn picks_files_that_can_carry_code() {
