@@ -148,6 +148,10 @@ pub struct Rule {
     pub severity: Severity,
     /// Shown to the user, Vietnamese first.
     pub message_vi: String,
+    /// The same message in English, shown when the app's language is English. Optional so packs
+    /// written before it existed still load; the app falls back to `message_vi`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_en: Option<String>,
     #[serde(default)]
     pub when: When,
     /// Where this threat persists on the machine, so "Dọn sạch giúp tôi" also cleans there. The
@@ -347,6 +351,19 @@ mod tests {
         std::fs::write(&path, b"garbage").unwrap();
         assert!(PackState::load(&path).is_err(), "damaged state is an error, not a reset");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn english_messages_are_optional_and_every_base_rule_has_one() {
+        let old = Pack::parse(br#"{"format":1,"version":1,"published":"x","rules":[{"id":"r","family":"F","severity":"malware","message_vi":"m"}]}"#).unwrap();
+        assert_eq!(old.rules[0].message_en, None, "a pack written before message_en still loads");
+        let json = serde_json::to_string(&old).unwrap();
+        assert!(!json.contains("message_en"), "and is written back without it");
+        let base = Pack::parse(include_bytes!("../../../rules/base.json")).unwrap();
+        assert!(!base.rules.is_empty());
+        for r in &base.rules {
+            assert!(r.message_en.as_deref().is_some_and(|m| !m.trim().is_empty()), "{} has no message_en", r.id);
+        }
     }
 
     #[test]

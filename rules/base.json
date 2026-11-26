@@ -9,6 +9,7 @@
       "severity": "malware",
       "machine_persistence": "xlstart",
       "message_vi": "Sâu macro Kangatang: tự chép vào thư mục khởi động Excel (XLSTART\\mypersonnel.xls), lây sang mọi sổ được mở và đổi .xlsx thành .xls. Không mở tệp này bằng Excel; dọn máy theo hướng dẫn.",
+      "message_en": "Kangatang macro worm: copies itself into Excel's startup folder (XLSTART\\mypersonnel.xls), spreads to every workbook that is opened and turns .xlsx into .xls. Do not open this file in Excel; clean the computer as shown.",
       "when": {
         "vba_source_all": ["mypersonnel.xls", "OnSheetActivate"]
       }
@@ -19,6 +20,7 @@
       "severity": "malware",
       "machine_persistence": "xlstart",
       "message_vi": "Có module VBA tên Kangatang (biến thể sâu Kangatang).",
+      "message_en": "Has a VBA module named Kangatang (a variant of the Kangatang worm).",
       "when": {
         "vba_module_name_any": ["Kangatang"]
       }
@@ -28,6 +30,7 @@
       "family": "downloader",
       "severity": "malware",
       "message_vi": "Macro tải và chạy chương trình từ Internet.",
+      "message_en": "A macro that downloads and runs a program from the Internet.",
       "when": {
         "vba_source_any": ["URLDownloadToFile", "MSXML2.XMLHTTP", "WinHttp.WinHttpRequest"],
         "vba_source_all": ["Shell"]
