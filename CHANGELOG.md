@@ -11,7 +11,7 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   `expires` (refused once past it), and the highest accepted version is kept in the data folder so
   an older pack, or another pack with the same version, is refused.
 - Built-in macro heuristics; rules for the Kangatang Excel worm and generic macro downloaders.
-- CLI: `genra-av scan`, `genra-av rules keygen|sign|verify`.
+- CLI: `genra-av scan`, `genra-av clean`, `genra-av rules keygen|sign|verify`.
 - Quick scan of the places threats arrive (Downloads, Desktop, Documents, Zalo received files, Excel
   startup folders, removable drives), with a verdict cache: second run reads only changed files.
   The cache is tied to the rules and hash lists it was checked with; new lists are applied from the
@@ -26,5 +26,11 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - CI rule pack (`.github/workflows/rule-pack.yml`): MalwareBazaar hashes merged every 6 hours, built in
   a read-only job, signed with openssl in the protected `rule-pack` environment; versioned hash lists,
   14-day expiry, refuses to shrink the list. CLI: `rules verify --any-expiry`, `hashes dump`.
+- Engine: `clean` writes a macro-free copy of an Office file (OOXML → .xlsx/.docx/.pptx; .xls and .doc
+  without their VBA storage; .xls also without OBJPROJ and "Visual Basic module" sheets). VBA parts
+  are found by relationship type, content type and content, not by name; remote templates are removed;
+  Excel 4.0 macro sheets, auto-run names, macro add-ins and encrypted workbooks are refused.
+- Engine: zip input is bounded (256 MB decompressed, 20,000 entries, no duplicate or overlapping
+  entries); anything unreadable is reported as `vba_unreadable`, never as clean.
 - Backend at `genra-api.craftthecode.dev`: false-positive / bug reports and VBA-only sample upload.
 - Brand, UX decisions, design tokens and v1 mock-ups (`docs/`).

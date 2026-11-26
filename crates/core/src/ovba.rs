@@ -33,6 +33,9 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
                     break;
                 }
                 if flags >> bit & 1 == 0 {
+                    if out.len() - out_chunk_start >= 4096 {
+                        bail!("chunk decompresses past 4096 bytes");
+                    }
                     out.push(data[pos]);
                     pos += 1;
                     continue;
@@ -52,6 +55,10 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
                 let offset = ((token & !length_mask) >> (16 - bit_count)) as usize + 1;
                 if offset > diff {
                     bail!("copy token points before the chunk");
+                }
+                if diff + length > 4096 {
+                    // A chunk decompresses to at most 4096 bytes; more is a decompression bomb.
+                    bail!("chunk decompresses past 4096 bytes");
                 }
                 let from = out.len() - offset;
                 for i in 0..length {
@@ -125,6 +132,20 @@ pub fn latin1(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chunk_over_4096_bytes_is_refused() {
+        // 8 literals, then a copy token of length 4098: a chunk may only yield 4096 bytes, and
+        // without the check each 4 KB of input could expand ~1300×.
+        let mut chunk = vec![0x00];
+        chunk.extend_from_slice(b"aaaaaaaa");
+        chunk.extend_from_slice(&[0x01, 0xFF, 0x0F]);
+        let header = 0xB000u16 | (chunk.len() as u16 + 2 - 3);
+        let mut data = vec![0x01];
+        data.extend_from_slice(&header.to_le_bytes());
+        data.extend_from_slice(&chunk);
+        assert!(decompress(&data).is_err());
+    }
 
     // [MS-OVBA] 3.2.1 example: "#aaabcdefaaaaghijaaaaaklaaamnopqaaaaaaaaaaaarstuvwxyzaaa"
     #[test]

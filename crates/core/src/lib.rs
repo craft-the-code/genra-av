@@ -1,6 +1,7 @@
 //! Genra AV core: reads a file, extracts what rules match on, and returns a verdict.
 //! It never runs the file's code, never writes to it, and never sends it anywhere.
 
+pub mod clean;
 pub mod extract;
 pub mod ovba;
 pub mod quarantine;

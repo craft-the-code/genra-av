@@ -57,6 +57,13 @@ enum Cmd {
     /// Quarantined files: list, restore, purge expired.
     #[command(subcommand)]
     Quarantine(QuarantineCmd),
+    /// Write a macro-free copy of an Office file as <name>.clean.<ext>. The original is not changed.
+    Clean {
+        input: PathBuf,
+        /// Folder for the copy (default: next to the input).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Rule pack tooling for whoever publishes packs.
     #[command(subcommand)]
     Rules(RulesCmd),
@@ -202,6 +209,31 @@ fn run() -> Result<bool> {
             eprintln!("wrote {} ({} hashes), sha256 {}", out.display(), bin.len() / 32, hex::encode(sha2::Sha256::digest(&bin)));
             Ok(false)
         }
+        Cmd::Clean { input, out } => {
+            let size = std::fs::metadata(&input).with_context(|| format!("reading {}", input.display()))?.len();
+            if size > MAX_FILE {
+                bail!("{} is over {} MB", input.display(), MAX_FILE / 1024 / 1024);
+            }
+            let bytes = std::fs::read(&input)?;
+            let cleaned = genra_av_core::clean::clean(&bytes)?;
+            let ext = cleaned
+                .new_extension
+                .map(str::to_string)
+                .or_else(|| input.extension().map(|e| e.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let dir = out.unwrap_or_else(|| input.parent().map(Path::to_path_buf).unwrap_or_default());
+            let dest = dir.join(format!("{stem}.clean.{ext}"));
+            write_new(&dest, &cleaned.bytes)?;
+            for r in &cleaned.removed {
+                println!("removed  {r}");
+            }
+            for k in &cleaned.kept {
+                println!("kept     {k}");
+            }
+            println!("wrote    {}", dest.display());
+            Ok(false)
+        }
         Cmd::Rules(RulesCmd::Keygen { out }) => {
             let mut seed = [0u8; 32];
             getrandom::getrandom(&mut seed).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
@@ -244,6 +276,20 @@ fn run() -> Result<bool> {
             Ok(false)
         }
     }
+}
+
+/// Creates `dest` and writes `bytes`, failing if anything already exists at that path, a
+/// dangling symlink included (O_EXCL / CREATE_NEW: no check-then-write race, no following links).
+fn write_new(dest: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dest)
+        .with_context(|| format!("{} exists or cannot be created; refusing to overwrite", dest.display()))?;
+    f.write_all(bytes).with_context(|| format!("writing {}", dest.display()))?;
+    f.sync_all()?;
+    Ok(())
 }
 
 fn sig_path(pack: &Path) -> PathBuf {
@@ -384,5 +430,35 @@ mod tests {
         let pack = Pack::parse(br#"{"format":1,"version":1,"published":"x","hash_sets":[{"file":"missing.bin","sha256":"00","family":"f","source":"s"}]}"#).unwrap();
         let rep = load_reputation(Some(&pack), Some(Path::new("/nonexistent/pack.json")));
         assert_eq!(rep.entries(), 0);
+    }
+}
+
+#[cfg(test)]
+mod clean_tests {
+    use super::*;
+
+    #[test]
+    fn write_new_never_overwrites_or_follows_links() {
+        let dir = std::env::temp_dir().join(format!("genra-av-write-new-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("a.clean.xlsx");
+        std::fs::write(&existing, b"keep").unwrap();
+        assert!(write_new(&existing, b"new").is_err());
+        assert_eq!(std::fs::read(&existing).unwrap(), b"keep");
+        #[cfg(unix)]
+        {
+            // A dangling symlink: `exists()` says false, but writing through it would create the
+            // link's target elsewhere.
+            let target = dir.join("elsewhere");
+            let link = dir.join("b.clean.xlsx");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(!link.exists());
+            assert!(write_new(&link, b"x").is_err());
+            assert!(!target.exists());
+        }
+        let fresh = dir.join("c.clean.xlsx");
+        write_new(&fresh, b"ok").unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"ok");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
