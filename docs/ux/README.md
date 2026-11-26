@@ -57,6 +57,10 @@ This puts a desktop repair engine early: the web check (Q3) finds problems, the 
 
 ## Screens to mock up first (P1)
 
+**Mock-ups v2 (26/11)**: [overview](mocks/v2/overview.png): navy sidebar, 4-item navigation (Tổng quan,
+Kiểm tra tệp, Máy của bạn, Cài đặt), the ☶ brand band, one end-to-end action per screen, undo on the
+result, the Excel-close step, and the notification that carries its fix. v1 is kept for history.
+
 Mock-ups v1 (26/11): [light, the default](mocks/v1/overview-light.png) and
 [dark](mocks/v1/overview-dark.png); one PNG + SVG per screen in `mocks/v1/light|dark/`, regenerated
 by `python3 mocks/v1/generate.py mocks/v1 light|dark`. Screens 1 → 3 → 5 → 4 follow one story: an infected
