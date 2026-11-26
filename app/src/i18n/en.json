@@ -275,5 +275,12 @@
   "update.install": "Update",
   "update.installing": "Updating…",
   "update.failed": "The update did not install. Check the connection and try again.",
-  "update.footer": "Version {version} is available"
+  "update.footer": "Version {version} is available",
+  "update.dialog.title": "Genra AV Updater",
+  "update.dialog.headline": "Genra AV {version} is available",
+  "update.dialog.summary": "You have {current}. The new version is signed by Genra; it downloads, installs and reopens by itself, keeping your data.",
+  "update.dialog.new": "What's new",
+  "update.dialog.later": "Later",
+  "update.dialog.install": "Update now",
+  "update.dialog.dismiss": "Close, don't remind me about this version"
 }

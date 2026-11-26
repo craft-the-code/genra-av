@@ -10,7 +10,7 @@
 #   macOS is signed and notarised only when all six APPLE_* secrets exist; Windows is unsigned for
 #   the beta; updater signatures are made only when TAURI_SIGNING_PRIVATE_KEY exists.
 # - publish (environment `release`, which only v*.*.* tags may deploy to): latest.json (when the
-#   updater files are signed), SHA256SUMS, build provenance attestations, notes from CHANGELOG.md,
+#   updater files are signed), SHA256SUMS, build provenance attestations, notes from whats-new/ and CHANGELOG.md,
 #   then a draft release with every file, published once all uploads succeeded. 0.x versions are
 #   marked pre-release.
 #
@@ -78,6 +78,8 @@ jobs:
         run: |
           version=$(python3 scripts/check-version.py "$TAG")
           python3 scripts/release-notes.py CHANGELOG.md "$version" > /dev/null
+          # User-facing notes in both languages (whats-new/<version>.{vi,en}.md, docs/whats-new.md).
+          python3 scripts/whats-new.py --check "$version"
           prerelease=false
           [ "${version%%.*}" = 0 ] && prerelease=true
           {
@@ -335,10 +337,15 @@ jobs:
       - name: Release notes and latest.json
         run: |
           python3 scripts/release-notes.py CHANGELOG.md "$VERSION" > changelog.md
+          # The app's update dialog shows the plain-language notes, in the user's language.
+          python3 scripts/whats-new.py "$VERSION" > user-notes.json
           python3 scripts/latest-json.py --dir release --version "$VERSION" --tag "$TAG" \
-            --repo "$GITHUB_REPOSITORY" --notes-file changelog.md
+            --repo "$GITHUB_REPOSITORY" --notes-file user-notes.json
           mac=$(head -n 1 meta/macos-signing.txt)
           {
+            python3 scripts/whats-new.py --markdown "$VERSION"
+            echo "## Changes (technical)"
+            echo
             cat changelog.md
             echo
             echo "## Downloads"

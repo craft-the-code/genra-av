@@ -8,6 +8,11 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 ### Added
 - Scan progress bar, scaled by the last finished scan of the same kind (a moving bar otherwise).
 - Roadmap (`docs/roadmap.md`) and code signing policy (`docs/signing.md`).
+- Update dialog "Genra AV Updater": headline, summary and "Có gì mới" in the user's language;
+  "Để sau" asks again next launch, × stays quiet until a newer version (Settings still offers it).
+- User-facing notes per version and language in `whats-new/` (rules in `docs/whats-new.md`,
+  checked by `scripts/whats-new.py`); the release fails without vi and en. The updater's notes are
+  now these, not the technical changelog.
 
 ### Changed
 - The window draws at once; each part (status, history, rules, settings) shows its own loading

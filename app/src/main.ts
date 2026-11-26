@@ -44,6 +44,8 @@ const state = {
   appVersion: "",
   update: null as api.UpdateInfo | null,
   updating: "idle" as "idle" | "busy" | "error",
+  /** The update dialog is open (it opens once per launch for a version not closed with ×). */
+  updateDialog: false,
   rules: null as api.RulesInfo | null,
   settings: { send_hashes: false } as api.Settings,
   scan: { status: "idle" } as ScanState,
@@ -1093,13 +1095,85 @@ function page(): string {
 
 const root = document.getElementById("app")!;
 
+/** The changelog section of the new version, as headings and bullets (release-notes.py output:
+ * a summary line, "### Added" headings, "- " bullets wrapped onto indented lines). */
+function parseNotes(md: string): { summary: string; sections: { title: string; items: string[] }[] } {
+  const sections: { title: string; items: string[] }[] = [];
+  const summary: string[] = [];
+  for (const raw of md.split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    const h = line.match(/^#{2,4}\s+(.*)$/);
+    if (h) {
+      sections.push({ title: h[1], items: [] });
+    } else if (/^\s*[-*]\s+/.test(line)) {
+      if (!sections.length) sections.push({ title: "", items: [] });
+      sections[sections.length - 1].items.push(line.replace(/^\s*[-*]\s+/, ""));
+    } else if (line.trim()) {
+      const cur = sections[sections.length - 1];
+      if (cur?.items.length && /^\s+/.test(line)) cur.items[cur.items.length - 1] += " " + line.trim();
+      else if (!sections.length) summary.push(line.trim());
+    }
+  }
+  const clean = (x: string) => x.replace(/`([^`]*)`/g, "$1").replace(/\*\*([^*]*)\*\*/g, "$1");
+  return {
+    summary: clean(summary.join(" ")),
+    sections: sections.filter((x) => x.items.length).map((x) => ({ title: clean(x.title), items: x.items.map(clean) })),
+  };
+}
+
+/** The updater's notes are one entry per language, {"vi": …, "en": …, …} (scripts/whats-new.py);
+ * older releases sent the changelog itself. Picks the window's language, then Vietnamese, then English,
+ * then whatever exists, so a new language needs only its file. */
+function userNotes(raw: string): string {
+  try {
+    const v = JSON.parse(raw) as Record<string, string>;
+    if (v && typeof v === "object") return v[getLang()] ?? v.vi ?? v.en ?? Object.values(v)[0] ?? "";
+  } catch {
+    /* plain text */
+  }
+  return raw;
+}
+
+/** "Genra AV Updater": shown once per launch when a version the user has not closed with × exists.
+ * Later (left) asks again next launch; × (top right) stays quiet until a newer version or Settings. */
+function updateDialog(): string {
+  const u = state.update;
+  if (!state.updateDialog || !u) return "";
+  const notes = parseNotes(userNotes(u.notes ?? ""));
+  const busy = state.updating === "busy";
+  const whatsNew = notes.sections.length
+    ? `<div class="whats-new" tabindex="0" aria-label="${esc(t("update.dialog.new"))}"><h3 class="overline">${esc(t("update.dialog.new"))}</h3>${notes.sections
+        .map((x) => `${x.title ? `<h4>${esc(x.title)}</h4>` : ""}<ul>${x.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`)
+        .join("")}</div>`
+    : "";
+  return `<div class="modal-backdrop">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="upd-title" aria-describedby="upd-head">
+      <div class="modal-bar"><span id="upd-title">${esc(t("update.dialog.title"))}</span>
+        <button class="icon-btn" data-action="update-dismiss" data-fid="upd-x" aria-label="${esc(t("update.dialog.dismiss"))}" title="${esc(t("update.dialog.dismiss"))}">${line("x", 16)}</button></div>
+      <div class="modal-body">
+        <div class="modal-head" id="upd-head">${mark}<div><h2>${esc(t("update.dialog.headline", { version: u.version }))}</h2>
+          <p>${esc(state.updating === "error" ? t("update.failed") : t("update.dialog.summary", { current: state.appVersion || "—" }))}</p>${
+            notes.summary ? `<p class="muted">${esc(notes.summary)}</p>` : ""
+          }</div></div>
+        ${whatsNew}
+      </div>
+      <div class="modal-actions">
+        <button class="btn" data-action="update-later" data-fid="upd-later"${busy ? " disabled" : ""}>${esc(t("update.dialog.later"))}</button>
+        <button class="btn primary" data-action="install-update" data-fid="upd-install"${busy ? ' disabled aria-busy="true" data-busy="true"' : ""}>${esc(
+          busy ? t("update.installing") : t("update.dialog.install"),
+        )}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function render(focusHeading = false) {
   const active = document.activeElement as HTMLElement | null;
   const fid = active?.dataset?.fid;
   // A mouse click should not leave a keyboard focus ring behind after the re-render.
   const ring = !!active?.matches(":focus-visible");
   const scrollTop = root.querySelector(".main")?.scrollTop ?? 0;
-  root.innerHTML = `<div class="shell">${sidebar()}<main class="main"><div class="page">${page()}</div></main></div>`;
+  root.innerHTML = `<div class="shell"${state.updateDialog ? " inert" : ""}>${sidebar()}<main class="main"><div class="page">${page()}</div></main></div>${updateDialog()}`;
   const main = root.querySelector<HTMLElement>(".main")!;
   if (focusHeading) {
     main.scrollTop = 0;
@@ -1504,6 +1578,15 @@ root.addEventListener("click", (ev) => {
     case "copy-id":
       void copyInstallId();
       break;
+    case "update-later":
+      state.updateDialog = false;
+      render();
+      break;
+    case "update-dismiss":
+      if (state.update) store("genra.update.dismissed", state.update.version);
+      state.updateDialog = false;
+      render();
+      break;
     case "goto-update":
       state.page = "settings";
       render(true);
@@ -1582,6 +1665,14 @@ root.addEventListener("click", (ev) => {
 root.addEventListener("input", (ev) => {
   const el = ev.target as HTMLTextAreaElement;
   if (el.id === "report-note") state.report.note = el.value;
+});
+
+// Esc on the update dialog is "Để sau" (asks again next launch), never the quiet ×.
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && state.updateDialog && state.updating !== "busy") {
+    state.updateDialog = false;
+    render();
+  }
 });
 
 root.addEventListener("change", (ev) => {
@@ -1665,7 +1756,11 @@ async function start() {
     .checkUpdate()
     .then((u) => {
       state.update = u;
-      if (u) render();
+      if (!u) return;
+      // × on this version keeps it quiet; a newer version asks again.
+      state.updateDialog = store("genra.update.dismissed") !== u.version;
+      render();
+      if (state.updateDialog) root.querySelector<HTMLElement>('[data-fid="upd-install"]')?.focus();
     })
     .catch(() => {});
 

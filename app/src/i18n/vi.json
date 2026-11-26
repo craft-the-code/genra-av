@@ -275,5 +275,12 @@
   "update.install": "Cập nhật",
   "update.installing": "Đang cập nhật…",
   "update.failed": "Chưa cập nhật được. Kiểm tra mạng rồi thử lại.",
-  "update.footer": "Có bản mới {version}"
+  "update.footer": "Có bản mới {version}",
+  "update.dialog.title": "Genra AV Updater",
+  "update.dialog.headline": "Đã có Genra AV {version}",
+  "update.dialog.summary": "Bạn đang dùng bản {current}. Bản mới có chữ ký của Genra; Genra tải về, cài rồi tự mở lại, không mất dữ liệu.",
+  "update.dialog.new": "Có gì mới",
+  "update.dialog.later": "Để sau",
+  "update.dialog.install": "Cập nhật ngay",
+  "update.dialog.dismiss": "Đóng, không nhắc lại bản này"
 }

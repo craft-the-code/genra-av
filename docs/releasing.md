@@ -16,16 +16,19 @@ Plan and decisions: [release-plan.md](release-plan.md).
 
    Numbers only (`0.1.0`, not `0.1.0-beta.1`): the MSI installer refuses other versions.
 
-2. **Changelog.** In `CHANGELOG.md`, rename `## [Unreleased]` to `## [0.1.0] - YYYY-MM-DD` and add a
+2. **User notes.** Rename `whats-new/unreleased.<lang>.md` to `whats-new/<version>.<lang>.md` (vi and en
+   at least) and check them against docs/whats-new.md: `python3 scripts/whats-new.py --check <version>`.
+   They are what users read in the update dialog; the release fails without them.
+3. **Changelog.** In `CHANGELOG.md`, rename `## [Unreleased]` to `## [0.1.0] - YYYY-MM-DD` and add a
    new empty `## [Unreleased]` above it. That section becomes the release notes; check it with
 
    ```bash
    python3 scripts/release-notes.py CHANGELOG.md 0.1.0
    ```
 
-3. **Merge** the bump and changelog through a pull request to `main`.
+4. **Merge** the bump and changelog through a pull request to `main`.
 
-4. **Tag** the merge commit on `main` and push the tag:
+5. **Tag** the merge commit on `main` and push the tag:
 
    ```bash
    git fetch origin && git checkout origin/main
