@@ -43,6 +43,11 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   place, keeps the original in quarantine, re-scans, and undoes in one press. "Quét nhanh máy" runs in
   the background with progress and says when it is waiting for the macOS permission prompt.
   Commands that take a path accept only paths picked, dropped or found by a scan in this session.
+- Release workflow (`.github/workflows/release.yml`): a `v<x.y.z>` tag builds the Windows (.exe, .msi),
+  universal macOS (.dmg) and Linux (.AppImage, .deb) installers, checks the tag against every version
+  in the repo, and publishes a GitHub Release with fixed file names, `SHA256SUMS`, build attestations,
+  notes from this file and the updater's `latest.json`. macOS signed and notarised; Windows unsigned
+  for the beta. `scripts/bump-version.py` sets the version everywhere (docs/releasing.md).
 - `genra_av_core::paths::data_dir()` shared by the CLI and the app (`GENRA_AV_DATA_DIR` overrides it).
 - Brand, UX decisions, design tokens and v1 mock-ups (`docs/`).
 - Machine repair (`crates/machine`): "Dọn sạch giúp tôi" cleans the machine, not just the file. A

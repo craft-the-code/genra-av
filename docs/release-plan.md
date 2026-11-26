@@ -38,8 +38,9 @@ everything, hard), convert to `.xlsx` (needs a spreadsheet engine), or values-on
 Azure Artifact Signing (ex-Trusted Signing, ~$9.99/month) is dropped: monthly cost for a few signings,
 and individual eligibility outside the US/Canada is unclear (Hoan, 26/11: too expensive for the use).
 
-Builds: Linux and Windows in GitLab CI (shared Linux and Windows runners); macOS on Hoan's Mac
-until a macOS runner is worth paying for.
+Builds: GitHub Actions, `.github/workflows/release.yml`, on a `v<x.y.z>` tag: Windows, macOS
+(universal) and Linux runners, free for the public repo. How to cut a release, what is signed and
+the `release` environment: [releasing.md](releasing.md).
 
 ## Downloads: GitHub Releases (Hoan, 26/11)
 
@@ -47,7 +48,11 @@ until a macOS runner is worth paying for.
   release notes copied from `CHANGELOG.md` (Keep a Changelog, SemVer).
 - Stable links for the landing page: `https://github.com/craft-the-code/genra-av/releases/latest/download/<file>`
   with fixed file names per OS (`Genra-AV-Setup.exe`, `Genra-AV.msi`, `Genra-AV.dmg`, `Genra-AV.AppImage`, `genra-av.deb`).
-- The Tauri updater reads `latest.json` from the latest release.
+- The Tauri updater reads `latest.json` from the latest release (its own minisign keypair, public
+  key in `app/src-tauri/tauri.release.conf.json`; wiring the updater plugin into the app is still to do).
+- 0.x releases are GitHub **pre-releases**. `releases/latest` skips pre-releases, so the fixed
+  `latest/download` links and the updater endpoint only resolve from the first non-pre-release;
+  until then, link testers to the tag (`releases/download/v0.1.0/<file>`).
 - Landing page: craftthecode.dev gets a Genra AV page with per-OS download buttons, changelog link,
   **FAQ**, **privacy policy** and **terms**, once v0.1 is released.
 
@@ -81,7 +86,8 @@ Free signing and free CI both need a public open-source repo, which this unlocks
 
 1. Public repo on GitHub, Apache-2.0 (Q9).
 2. **GitHub Actions** builds all installers: Windows, macOS and Linux runners are free for public
-   repos, so macOS no longer needs Hoan's Mac (Apple signing secrets go into Actions secrets).
+   repos, so macOS no longer needs Hoan's Mac. Done: `release.yml`; Apple and updater secrets are in
+   the `release` environment, which only `v*` tags may use (26/11).
 3. **GitHub Releases** host the installers, with stable links
    `github.com/<org>/genra-av/releases/latest/download/<file>` for the landing page. R2 is then only
    needed for rule packs and the backend.
