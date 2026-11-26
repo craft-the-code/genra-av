@@ -77,6 +77,8 @@ enum QuarantineCmd {
 enum HashesCmd {
     /// Text (one hex SHA-256 per line) -> sorted binary list for a pack; prints its SHA-256.
     Build { input: PathBuf, out: PathBuf },
+    /// Binary list -> one hex SHA-256 per line on stdout (the CI merges a verified previous list this way).
+    Dump { input: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -85,8 +87,15 @@ enum RulesCmd {
     Keygen { out: PathBuf },
     /// Sign a pack: writes <pack>.sig.
     Sign { pack: PathBuf, #[arg(long)] key: PathBuf },
-    /// Check a pack's signature and format.
-    Verify { pack: PathBuf, #[arg(long)] pubkey: PathBuf },
+    /// Check a pack's signature, format, expiry and the hash lists beside it.
+    Verify {
+        pack: PathBuf,
+        #[arg(long)]
+        pubkey: PathBuf,
+        /// Accept an expired pack or one without `expires` (publishers reading an older pack).
+        #[arg(long)]
+        any_expiry: bool,
+    },
 }
 
 fn main() {
@@ -175,6 +184,17 @@ fn run() -> Result<bool> {
             }
             Ok(false)
         }
+        Cmd::Hashes(HashesCmd::Dump { input }) => {
+            use std::io::Write;
+            let bytes = std::fs::read(&input).with_context(|| format!("reading {}", input.display()))?;
+            HashList::from_bytes(&bytes)?;
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            for d in bytes.as_chunks::<32>().0 {
+                writeln!(out, "{}", hex::encode(d))?;
+            }
+            out.flush()?;
+            Ok(false)
+        }
         Cmd::Hashes(HashesCmd::Build { input, out }) => {
             let bin = HashList::build_from_text(&std::fs::read_to_string(&input)?)?;
             std::fs::write(&out, &bin)?;
@@ -208,9 +228,19 @@ fn run() -> Result<bool> {
             eprintln!("wrote {}", out.display());
             Ok(false)
         }
-        Cmd::Rules(RulesCmd::Verify { pack, pubkey }) => {
-            let p = load_pack(Some(&pack), Some(&pubkey), false, false)?.expect("pack given");
-            eprintln!("ok: version {}, {} rules, signature valid", p.version, p.rules.len());
+        Cmd::Rules(RulesCmd::Verify { pack, pubkey, any_expiry }) => {
+            let p = if any_expiry {
+                let bytes = std::fs::read(&pack).with_context(|| format!("reading {}", pack.display()))?;
+                let key = verifying_key_from_hex(&std::fs::read_to_string(&pubkey)?)?;
+                let sig = std::fs::read_to_string(sig_path(&pack)).context("missing <pack>.sig")?;
+                Pack::signature_checked(&bytes, &sig, &[key])?
+            } else {
+                load_pack(Some(&pack), Some(&pubkey), false, false)?.expect("pack given")
+            };
+            // Strict here: a publisher must not build on a list that does not match its pack.
+            let dir = pack.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            let rep = Reputation::load(&p, dir)?;
+            eprintln!("ok: version {}, {} rules, {} hashes, signature valid", p.version, p.rules.len(), rep.entries());
             Ok(false)
         }
     }

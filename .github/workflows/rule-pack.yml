@@ -1,0 +1,169 @@
+# Builds and signs the rule pack every 6 hours and publishes it on the rolling `rules-latest`
+# release. Known-bad hashes accumulate: each run merges abuse.ch MalwareBazaar's recent export
+# into the list of the previous signed pack. See ADR 0002.
+#
+# Two jobs, so the signing key never meets cargo or any third-party code:
+# - build (read-only token; the only secret is the feed key): builds the CLI, verifies the
+#   previous pack and its hash list, merges, writes the unsigned pack.json, uploads an artifact.
+# - sign-publish (environment `rule-pack`, main only, holds GENRA_PACK_SIGNING_KEY): runs only
+#   the runner's own tools (openssl, python3 stdlib, gh) and this commit's scripts. It treats the
+#   artifact as untrusted: rules must equal rules/base.json, the hash set must be one untrusted
+#   `suspicious` list, the version must grow and the count must not shrink. Then it signs with
+#   openssl, verifies against keys/pack-1.pub, and publishes the hash list first, the pack JSON
+#   next and the signature last.
+name: rule-pack
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["rules/**", "keys/**", "scripts/**", ".github/workflows/rule-pack.yml"]
+
+permissions: {}
+
+concurrency:
+  group: rule-pack
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Build the CLI
+        run: cargo build --release --locked -p genra-av
+
+      - name: Previous signed pack and hash list
+        run: |
+          mkdir -p prev out
+          if view=$(gh release view rules-latest --json tagName 2>&1); then
+            # The release exists: every download and check must pass, or the job fails. Never
+            # an empty previous list, which would shrink the published one.
+            gh release download rules-latest -p pack.json -p pack.json.sig -D prev
+            scripts/pack-sig.sh verify prev/pack.json keys/pack-1.pub
+            python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]' > prev.lists
+            grep -qvE '^[A-Za-z0-9._-]+\.bin$' prev.lists && { echo "odd hash list name"; exit 1; }
+            while read -r f; do gh release download rules-latest -p "$f" -D prev; done < prev.lists
+            # Signature again, plus each list against the digest and count in the signed pack.
+            ./target/release/genra-av rules verify prev/pack.json --pubkey keys/pack-1.pub --any-expiry
+            while read -r f; do ./target/release/genra-av hashes dump "prev/$f"; done < prev.lists > prev.txt
+            python3 -c 'import json; print(json.load(open("prev/pack.json"))["version"])' > prev.version
+          elif grep -q "release not found" <<<"$view"; then
+            echo "no rules-latest release yet: starting from an empty list"
+            : > prev.txt
+            echo 0 > prev.version
+          else
+            echo "$view"
+            exit 1
+          fi
+          echo "previous: version $(cat prev.version), $(wc -l < prev.txt) hashes"
+
+      - name: MalwareBazaar recent additions
+        env:
+          ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
+        # abuse.ch documents the export key only as a path segment (bazaar.abuse.ch/export);
+        # the Auth-Key header is documented for the POST API, not for exports. The key is a
+        # masked secret, and curl -sS does not print the URL on failure.
+        run: |
+          curl -sSf --retry 3 -A "genra-av-ci" \
+            "https://mb-api.abuse.ch/v2/files/exports/${ABUSECH_AUTH_KEY}/recent.csv" -o recent.csv
+          python3 scripts/extract-sha256.py < recent.csv > recent.txt
+          echo "recent: $(wc -l < recent.txt) hashes"
+          test -s recent.txt
+
+      - name: Merge and build the unsigned pack
+        run: |
+          sort -u prev.txt recent.txt > merged.txt
+          prev=$(wc -l < prev.txt)
+          total=$(wc -l < merged.txt)
+          echo "total: $total hashes (previous $prev)"
+          [ "$total" -ge "$prev" ] || { echo "the list would shrink"; exit 1; }
+          ./target/release/genra-av hashes build merged.txt merged.bin
+          echo "version $(python3 scripts/build-pack.py rules/base.json merged.bin "$(cat prev.version)" out)"
+          ./target/release/genra-av scan --rules out/pack.json --unsigned README.md
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-pack
+          path: out/
+          if-no-files-found: error
+          retention-days: 3
+
+  sign-publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Protected environment: only the main branch may deploy to it, and GENRA_PACK_SIGNING_KEY
+    # lives there, not in the repository secrets.
+    environment: rule-pack
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Our own reviewed files from this commit: keys/, rules/base.json, scripts/. Nothing is built.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: unsigned-pack
+          path: out
+
+      - name: Check the unsigned pack against base.json and the previous pack
+        run: |
+          mkdir -p prev
+          if view=$(gh release view rules-latest --json tagName 2>&1); then
+            gh release download rules-latest -p pack.json -p pack.json.sig -D prev
+            scripts/pack-sig.sh verify prev/pack.json keys/pack-1.pub
+            python3 scripts/check-pack.py rules/base.json out/pack.json prev/pack.json
+          elif grep -q "release not found" <<<"$view"; then
+            python3 scripts/check-pack.py rules/base.json out/pack.json
+          else
+            echo "$view"
+            exit 1
+          fi
+
+      - name: Sign with openssl
+        env:
+          SIGNING_KEY: ${{ secrets.GENRA_PACK_SIGNING_KEY }}
+        run: scripts/pack-sig.sh sign out/pack.json keys/pack-1.pub
+
+      - name: Publish (hash list, then pack.json, then the signature)
+        run: |
+          bin=$(python3 -c 'import json; print(json.load(open("out/pack.json"))["hash_sets"][0]["file"])')
+          keep=""
+          if [ -f prev/pack.json ]; then
+            keep=$(python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]')
+          fi
+          gh release view rules-latest >/dev/null 2>&1 ||
+            gh release create rules-latest --prerelease --title "Rule pack (rolling)" \
+              --notes "Signed rule pack, rebuilt every 6 hours. Apps download pack.json and pack.json.sig, then the hash list the pack names; the signature covers the list's digest. A client that cannot verify a new pack keeps its previous one."
+          # The versioned list is not named by the published pack yet, so uploading it first
+          # cannot break clients. The signature goes last: a client may briefly see the new
+          # pack.json with the old signature, which fails verification, and it keeps its
+          # previous pack.
+          gh release upload rules-latest --clobber "out/$bin"
+          gh release upload rules-latest --clobber out/pack.json
+          gh release upload rules-latest --clobber out/pack.json.sig
+          # Keep the new list and the previous one (clients mid-download); drop older lists.
+          gh release view rules-latest --json assets -q '.assets[].name' | while read -r name; do
+            case "$name" in
+              malwarebazaar*.bin | malwarebazaar*.txt.gz)
+                if [ "$name" != "$bin" ] && ! grep -qxF "$name" <<<"$keep"; then
+                  gh release delete-asset rules-latest "$name" -y
+                fi
+                ;;
+            esac
+          done

@@ -206,6 +206,14 @@ impl Pack {
     }
 }
 
+/// Public keys the official packs are signed with (keys/*.pub). `pack-2` is the standby key, so
+/// the signing key can be rotated without an app release (ADR 0002).
+pub const TRUSTED_PACK_KEYS: [&str; 2] = [include_str!("../../../keys/pack-1.pub"), include_str!("../../../keys/pack-2.pub")];
+
+pub fn trusted_keys() -> Vec<VerifyingKey> {
+    TRUSTED_PACK_KEYS.iter().filter_map(|k| verifying_key_from_hex(k).ok()).collect()
+}
+
 pub fn verifying_key_from_hex(s: &str) -> Result<VerifyingKey> {
     let bytes: [u8; 32] = hex::decode(s.trim())
         .context("public key is not hex")?
@@ -334,5 +342,10 @@ mod tests {
         std::fs::write(&path, b"garbage").unwrap();
         assert!(PackState::load(&path).is_err(), "damaged state is an error, not a reset");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn both_official_keys_parse() {
+        assert_eq!(super::trusted_keys().len(), 2);
     }
 }
