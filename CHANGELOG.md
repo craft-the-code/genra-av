@@ -5,6 +5,18 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-26
+
+Pre-release: Windows installers are not code-signed yet; macOS is signed and notarised.
+
+### Added
+- Quick scan lists every file it found ("Tệp tìm thấy"), each one press from its own result.
+  The list is kept with the scan in history, so after a restart each file can be checked again
+  on its own ("Kiểm tra lại") without scanning the whole computer.
+
+### Fixed
+- Release: the macOS dmg, already signed by Tauri, is re-signed with `--force` before notarising.
+
 ## [0.1.0] - 2026-11-26
 
 First pre-release: Windows installers are not code-signed yet; macOS is signed and notarised.
