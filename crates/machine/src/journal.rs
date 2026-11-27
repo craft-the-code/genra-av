@@ -8,6 +8,7 @@
 //! - [`Change::Quarantine`]: a file moved into Genra's quarantine (`<data_dir>/quarantine/`).
 //! - [`Change::CreateFile`]: a new file Genra wrote (a clean copy). It never replaces anything.
 //! - [`Change::SetRegistryValue`] and [`Change::MoveRegistryValue`]: current-user registry only.
+//! - [`Change::SetAttributes`]: a file or folder's attribute bits (unhiding what a USB worm hid).
 //!
 //! Undo never overwrites a file that exists now and refuses when the state changed since the
 //! change was made (a different hash, a different registry value). A group is checked as a
@@ -36,6 +37,8 @@ pub enum Change {
     SetRegistryValue { key: String, name: String, previous: Option<RegValue>, new: RegValue },
     /// A registry value moved from `key` to `backup_key` (same name): a startup entry switched off.
     MoveRegistryValue { key: String, name: String, value: RegValue, backup_key: String },
+    /// `path`'s attribute bits changed from `previous` to `new` (Windows Hidden/System).
+    SetAttributes { path: PathBuf, previous: u32, new: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +323,15 @@ impl Journal {
         self.end(group_id, &id, r, |_| None)
     }
 
+    /// Sets a file or folder's attribute bits, recording the previous ones.
+    pub fn set_attributes(&mut self, group_id: &str, path: &Path, new: u32, title_vi: &str, title_en: &str) -> Result<()> {
+        let previous = crate::attrs::get(path)?;
+        let change = Change::SetAttributes { path: path.to_path_buf(), previous, new };
+        let id = self.begin(group_id, change, title_vi, title_en)?;
+        let r = crate::attrs::set(path, new);
+        self.end(group_id, &id, r, |_| None)
+    }
+
     /// The quarantine item holding an entry's file: from its "done" line, or (if Genra stopped
     /// before writing it) the item with the same origin and hash put there since the entry.
     fn find_quarantined(&self, e: &Entry) -> Option<String> {
@@ -388,6 +400,17 @@ impl Journal {
                     bail!("{key}\\{name} changed since; not touching it")
                 }
             }
+            Change::SetAttributes { path, previous, new } => {
+                let mask = crate::attrs::HIDDEN | crate::attrs::SYSTEM;
+                let now = crate::attrs::get(path)?;
+                if now & mask == new & mask {
+                    Ok(previous & mask != new & mask)
+                } else if pending && now & mask == previous & mask {
+                    Ok(false)
+                } else {
+                    bail!("{} changed since; not touching it", path.display())
+                }
+            }
             Change::MoveRegistryValue { key, name, value, backup_key } => {
                 let (here, backup) = (reg::get(key, name)?, reg::get(backup_key, name)?);
                 match (here, backup) {
@@ -416,6 +439,12 @@ impl Journal {
             Change::MoveRegistryValue { key, name, value, backup_key } => {
                 reg::set(key, name, value)?;
                 reg::delete_value(backup_key, name)?;
+            }
+            Change::SetAttributes { path, previous, .. } => {
+                // Only the hide bits go back; anything else the user changed since is kept.
+                let mask = crate::attrs::HIDDEN | crate::attrs::SYSTEM;
+                let now = crate::attrs::get(path)?;
+                crate::attrs::set(path, (now & !mask) | (previous & mask))?;
             }
         }
         self.append(&e.group_id, &Line::Undone { id: e.id.clone(), at: now() })

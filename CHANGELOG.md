@@ -6,6 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 ## [Unreleased]
 
 ### Added
+- USB worm clean-up (ADR 0004, 4b): when a threat is on a removable drive, "Dọn sạch giúp tôi" also
+  quarantines the worm's other shortcuts at the root and its files in hidden folders, and shows the
+  user's hidden folders and files again (Windows Hidden/System attributes, journal change
+  `SetAttributes`, undone with the rest of the repair). Nothing is deleted or renamed; system items
+  (System Volume Information, the recycle bin, …) stay hidden; without a worm shortcut nothing is
+  unhidden.
+- A threat that is not an Office document (shortcut, script, archive, program) is quarantined by
+  "Dọn sạch giúp tôi" instead of being sent to the Office cleaner, and the threat screen says so.
+- CI on pull requests: engine, machine layer and CLI tests and clippy on Windows and macOS.
 - Delivery checks (ADR 0004, step 2), all "suspicious" until measured:
   - inside plain `.zip` archives, every entry is scanned the same way (two levels deep, zip-bomb
     budget), reported as `<rule>@zip` with the entry's name; a password-protected zip holding a

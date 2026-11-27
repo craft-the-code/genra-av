@@ -319,7 +319,7 @@ fn machine(name: &str) -> Machine {
 }
 
 fn scope<'a>(m: &Machine, p: &'a Pack, excel: ExcelStatus) -> Scope<'a> {
-    Scope { pack: Some(p), reputation: None, xlstart_dirs: vec![m.xlstart.clone()], scan_roots: vec![m.root.join("Documents"), m.root.join("Downloads")], excel }
+    Scope { pack: Some(p), reputation: None, xlstart_dirs: vec![m.xlstart.clone()], scan_roots: vec![m.root.join("Documents"), m.root.join("Downloads")], excel, removable: vec![] }
 }
 
 #[test]
@@ -426,4 +426,44 @@ fn a_threat_found_in_xlstart_is_moved_out_not_cleaned_in_place() {
     assert_eq!(r.outcome, Outcome::Done, "{r:#?}");
     assert!(!m.worm_in_xlstart.exists());
     let _ = std::fs::remove_dir_all(&m.root);
+}
+
+/// A shortcut that runs cmd with a long hidden command, as USB worms make.
+fn worm_lnk() -> Vec<u8> {
+    let mut b = vec![0x4C, 0, 0, 0, 0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46];
+    b.extend((0x08u32 | 0x20 | 0x80).to_le_bytes());
+    b.resize(76, 0);
+    for s in ["..\\..\\..\\Windows\\System32\\cmd.exe", &format!("/c start wscript /e:vbs \"_\\x.dat\" & start explorer \"Tai lieu\" {}", "&".repeat(400))] {
+        let u: Vec<u16> = s.encode_utf16().collect();
+        b.extend((u.len() as u16).to_le_bytes());
+        for c in u {
+            b.extend(c.to_le_bytes());
+        }
+    }
+    b
+}
+
+#[test]
+fn a_threat_that_is_not_an_office_file_is_quarantined_with_the_usb_worm_s_other_shortcuts() {
+    let root = tmp("usb-plan");
+    let usb = root.join("USB");
+    std::fs::create_dir_all(&usb).unwrap();
+    let a = usb.join("Tai lieu.lnk");
+    let b = usb.join("Hinh anh.lnk");
+    std::fs::write(&a, worm_lnk()).unwrap();
+    std::fs::write(&b, worm_lnk()).unwrap();
+    let p = pack();
+    let report = genra_av_core::scan_named("Tai lieu.lnk", &std::fs::read(&a).unwrap(), Some(&p), None);
+    assert!(report.verdict.is_some_and(|v| v >= genra_av_core::rules::Severity::Suspicious));
+    let mut s = Scope { pack: Some(&p), reputation: None, xlstart_dirs: vec![], scan_roots: vec![], excel: ExcelStatus::default(), removable: vec![usb.clone()] };
+    let plan = plan_for_threat_in(&a, &report, &s);
+    let quarantined: Vec<&PathBuf> = plan.steps.iter().filter_map(|st| if let Action::QuarantineFile { path, .. } = &st.action { Some(path) } else { None }).collect();
+    assert_eq!(quarantined, [&a, &b], "the shortcut itself, then the worm's other shortcut; nothing replaced");
+    assert!(!plan.steps.iter().any(|st| matches!(st.action, Action::ReplaceWithClean { .. })));
+    // Not on a removable drive: only the file itself.
+    s.removable.clear();
+    let plan = plan_for_threat_in(&a, &report, &s);
+    assert_eq!(plan.steps.len(), 1);
+    assert!(plan.summary_vi.contains("cách ly"));
+    let _ = std::fs::remove_dir_all(&root);
 }

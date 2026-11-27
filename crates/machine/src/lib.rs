@@ -12,6 +12,7 @@
 //! process runs with a timeout and no window; nothing goes on the network; nothing asks for
 //! admin rights; user data is never deleted (it goes through quarantine and the journal).
 
+pub mod attrs;
 pub mod health;
 pub mod journal;
 pub mod office;
@@ -20,6 +21,7 @@ pub mod rails;
 pub mod reg;
 pub mod repair;
 pub mod startup;
+pub mod usb;
 
 pub use journal::Journal;
 
