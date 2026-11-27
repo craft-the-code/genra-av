@@ -361,7 +361,7 @@ jobs:
             echo
             echo "## Signing"
             echo
-            echo "- Windows: **not signed** in this beta. SmartScreen will warn; choose More info, then Run anyway."
+            echo "- Windows: **not signed** yet. Edge and SmartScreen will warn; the install guide shows each click: [Tiếng Việt](https://github.com/craft-the-code/genra-av/blob/main/docs/install/windows.vi.md) · [English](https://github.com/craft-the-code/genra-av/blob/main/docs/install/windows.en.md)."
             if [ "$mac" = signed ]; then
               echo "- macOS: signed with Developer ID and notarised by Apple."
             else

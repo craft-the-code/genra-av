@@ -5,7 +5,24 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
 ### Added
+- Windows install guide with illustrated steps for the Edge and SmartScreen warnings and the
+  installer, in Vietnamese and English (`docs/install/`, pictures drawn by `docs/install/generate.py`);
+  linked from the README and every release's notes. The NSIS installer shows Vietnamese (English on an
+  English Windows).
+- Windows Defender as a second opinion (ADR 0004, step 4, #29): a suspicious program, script,
+  shortcut, disk image or archive is shown to Defender (`MpCmdRun -DisableRemediation`) when Defender
+  is the computer's antivirus; a malware-category detection raises the verdict, with Defender's name.
+  Never Office documents or PDFs; a signed program still asks; at most 20 files and two minutes per
+  scan. `genra-av scan --defender`, and a `defender` input on the detection report.
+- YARA rules for malware families (ADR 0004, step 3, #28): about 3 100 rules from licensed sets
+  (YARA Forge core, ReversingLabs), engine boreal, rebuilt byte for byte at signing; every match is
+  suspicious unless the pack names the rule as malware.
+- Machine disinfection (ADR 0004, 2b, #27): "Dọn sạch giúp tôi" stops the running threat, switches off
+  the Run entries, Startup items and scheduled tasks that start it, and lifts the Task Manager,
+  Registry Editor and Folder Options locks; every step is undoable.
 - USB worm clean-up (ADR 0004, 4b): when a threat is on a removable drive, "Dọn sạch giúp tôi" also
   quarantines the worm's other shortcuts at the root and its files in hidden folders, and shows the
   user's hidden folders and files again (Windows Hidden/System attributes, journal change

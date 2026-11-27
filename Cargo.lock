@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "genra-av"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "genra-av-app"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "genra-av-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "boreal",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "genra-av-machine"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cfb 0.10.0",
