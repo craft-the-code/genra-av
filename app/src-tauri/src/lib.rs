@@ -159,7 +159,7 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
             return Err("too_large".into());
         }
         let bytes = std::fs::read(&p).map_err(|e| format!("read: {e}"))?;
-        let report = quick::checked(genra_av_core::scan_named(&util::file_name(&p), &bytes, Some(&rules.pack), Some(&rules.reputation)), &p);
+        let report = quick::checked(genra_av_core::scan_named(&util::file_name(&p), &bytes, Some(&rules.pack), Some(&rules.reputation)), &p, &rules);
         Ok(ScanResult { name: util::file_name(&p), path, size: meta.len(), hash_only: quick::hash_only(&report), report })
     })
     .await

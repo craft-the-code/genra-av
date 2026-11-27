@@ -91,6 +91,44 @@ quarantine anything.
   Defender follows its own settings: with "automatic sample submission" on (the Windows default),
   Defender may upload a suspicious file to Microsoft. The privacy policy says so.
 
+As built (step 4, `crates/machine/src/defender.rs`):
+
+- Asked: a file whose verdict is exactly suspicious (nothing on it already quarantines it) and
+  whose extension is a program, script, shortcut, disk image or archive (.msi included), and
+  which is not a document under another name: old-format Office files and files with macros by
+  the scan, new-format Office files and PDFs by their first bytes, read just before asking.
+  Defender is asked when `Get-MpComputerStatus` says the antivirus is on and in normal mode.
+  Passive mode means another antivirus is in charge, which the user chose: Defender is not asked.
+  Office documents, PDFs and other files of the user's own are left out: macros have Genra's own
+  "Dọn sạch giúp tôi" (data kept), and those are the files most likely to carry the user's data
+  to Microsoft's sample submission.
+- Only Defender's malware categories raise the verdict: Trojan (and its Downloader, Dropper, Spy,
+  Proxy, Clicker, Notifier kinds), Backdoor, Worm, Virus, Ransom, PWS, Spyware. HackTool, PUA,
+  RemoteAccess, Program, Exploit and the rest are shown as one more suspicious finding: those are
+  often tools an office uses on purpose (AnyDesk, PsExec). A detection whose name cannot be read
+  does not raise it either. Defender finding nothing never clears Genra's own finding.
+- The name is read by its shape (`Category:Platform/Family…`), not by MpCmdRun's label, which may
+  be translated; exit code 0 is clean, 2 is a detection, anything else is no answer.
+- The finding's rule id is `defender.` plus the name with `:`, `/`, `!` as `_` (what reports and
+  `pack.disabled` accept); `disabled: ["defender"]` switches the layer off.
+- One quick scan asks Defender about 20 files at most and starts none after two minutes (one
+  already running may take its 60 s timeout); it stops asking after the first failure or when the
+  user presses "Dừng". Files past that budget still get an answer Defender already gave. The window says
+  "đang hỏi thêm Windows Defender" meanwhile. An answer is kept for four hours by SHA-256, so
+  opening the file or pressing "Dọn sạch giúp tôi" does not ask again.
+- Like the signed-file rail: a validly signed program is never moved on Defender's word alone; it
+  shows as malware and the user decides. Defender answering "nothing found" is shown as "no
+  further warning", never as clean: Defender skips its exclusion list, which malware edits.
+- `disabled` also takes a prefix ending in `*` (`defender.Trojan_Win32_Wacatac*`) for one family.
+- Measured with `detection-report` and its `defender` input: the malware scan runs on Windows with
+  `scan --defender` (real-time protection and sample submission off on that runner), and the
+  report adds "Raised to malware by Defender", every other column staying Genra alone. With
+  real-time protection on, as on users' machines, Defender already catches many of those files
+  when Genra reads them, so that column is an upper bound on what the layer adds. Samples keep
+  their type's extension from step 4 on, so the app's per-extension choices are what is measured;
+  this also lets Genra's own name checks fire, so the script and shortcut rows rise against older
+  reports (the report says so, and its JSON carries `naming`).
+
 ### What quarantines, what asks
 
 | Evidence | Verdict | Action |

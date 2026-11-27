@@ -60,6 +60,8 @@ const state = {
     folder: "",
     files: 0,
     waiting: false,
+    /** Windows Defender is being asked about a suspicious file (`folder` is that file). */
+    defender: false,
     result: null as QuickResult | null,
     handled: new Set<string>(),
     error: "",
@@ -311,7 +313,13 @@ function band(): string {
       text = [t("band.waiting.text", { folder: shortFolder(q.folder) })];
     } else {
       title = t(q.scope === "full" ? "band.running.full" : q.scope === "folder" ? "band.running.folder" : "band.running.title");
-      text = [q.folder ? t("band.running.text", { folder: shortFolder(q.folder), files: nf(q.files) }) : t("band.running.start")];
+      text = [
+        q.defender
+          ? t("band.defender.text", { name: baseName(q.folder) })
+          : q.folder
+            ? t("band.running.text", { folder: shortFolder(q.folder), files: nf(q.files) })
+            : t("band.running.start"),
+      ];
     }
     if (!q.waiting) progress = progressBar(q.scope, q.files);
     action = q.stopping
@@ -1461,7 +1469,7 @@ async function doUndo(u: Undo) {
 async function startQuick(scope: ScanScope = "quick") {
   if (state.quick.running) return;
   const begin = () => {
-    Object.assign(state.quick, { running: true, scope, stopping: false, folder: "", files: 0, waiting: false, error: "" });
+    Object.assign(state.quick, { running: true, scope, stopping: false, folder: "", files: 0, waiting: false, defender: false, error: "" });
     render();
   };
   try {
@@ -1719,11 +1727,11 @@ async function start() {
   render();
 
   await api.onProgress((p) => {
-    Object.assign(state.quick, { running: true, folder: p.folder, files: p.files, waiting: p.phase === "waiting" });
+    Object.assign(state.quick, { running: true, folder: p.folder, files: p.files, waiting: p.phase === "waiting", defender: p.phase === "defender" });
     if (state.page === "overview") render();
   });
   await api.onQuickDone((r) => {
-    Object.assign(state.quick, { running: false, stopping: false, waiting: false, result: r, handled: new Set<string>() });
+    Object.assign(state.quick, { running: false, stopping: false, waiting: false, defender: false, result: r, handled: new Set<string>() });
     // The band reads the new history entry (folder and stopped scans keep older findings).
     void refreshHistory();
   });

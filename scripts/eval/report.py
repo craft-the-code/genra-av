@@ -9,7 +9,9 @@ and built-in checks only): the hash lists contain MalwareBazaar's own recent sam
 number flatters us and the second says what we catch in files nobody has listed yet.
 
 A third number is what the YARA family rules alone catch (rule ids `yara.*`), so each layer's
-share is visible (ADR 0004, "measurement gates every layer").
+share is visible (ADR 0004, "measurement gates every layer"). On a run with `scan --defender`
+(Windows), Defender's findings (`defender.*`) are left out of every column but the last, which
+counts the samples Genra called only suspicious and Defender raised to malware.
 
 Clean results count false positives: any file rated suspicious or malware, listed by rule; the
 YARA rules among them are listed once more by name, ready for rules/yara-disabled.json.
@@ -46,15 +48,22 @@ def main() -> None:
     # Denominators come from what was downloaded, not from what got scanned: a sample that failed
     # to unpack or was too large to read counts as "not scanned", never silently disappears.
     fetched = collections.Counter(m["type"] for m in manifest)
-    by_type = collections.defaultdict(lambda: {"n": 0, "scanned": 0, "any": 0, "no_hash": 0, "yara": 0, "malware": 0})
+    by_type = collections.defaultdict(lambda: {"n": 0, "scanned": 0, "any": 0, "no_hash": 0, "yara": 0, "malware": 0, "defender": 0})
     for t, n in fetched.items():
         by_type[t]["n"] = n
     missed_families = collections.Counter()
+    asked_defender = False
     for r in rows(a.malware):
-        t = os.path.basename(os.path.dirname(r["path"])) or "?"
+        # The CLI on Windows writes backslashes; this script may run elsewhere.
+        t = os.path.basename(os.path.dirname(r["path"].replace("\\", "/"))) or "?"
         s = by_type[t]
         s["scanned"] += 1
-        found = [f for f in r.get("findings", []) if serious(f)]
+        everything = [f for f in r.get("findings", []) if serious(f)]
+        is_defender = lambda f: f["rule"].startswith("defender.")
+        asked_defender |= any(f["rule"].startswith("defender.") for f in r.get("findings", []))
+        found = [f for f in everything if not is_defender(f)]
+        if not any(f.get("severity") == "malware" for f in found) and any(is_defender(f) and f.get("severity") == "malware" for f in everything):
+            s["defender"] += 1
         if found:
             s["any"] += 1
         if any(not f["rule"].startswith("hash.") for f in found):
@@ -76,16 +85,27 @@ def main() -> None:
                 fp.append((r["path"], found))
 
     pct = lambda x, n: f"{100 * x / n:.0f} %" if n else "–"
-    total = {k: sum(s[k] for s in by_type.values()) for k in ("n", "scanned", "any", "no_hash", "yara", "malware")}
+    total = {k: sum(s[k] for s in by_type.values()) for k in ("n", "scanned", "any", "no_hash", "yara", "malware", "defender")}
     print("## Genra AV detection report\n")
     print("Percentages are of samples downloaded. Archive types (zip, rar, 7z, iso) read near 0 % without")
     print("hash lists until archive scanning lands (ADR 0004 step 2); that is expected, not a regression.\n")
-    print("| File type | Samples | Not scanned | Caught | Caught without hash lists | By YARA rules | Rated malware |")
-    print("|---|---:|---:|---:|---:|---:|---:|")
+    extra = " Raised to malware by Defender |" if asked_defender else ""
+    print("| File type | Samples | Not scanned | Caught | Caught without hash lists | By YARA rules | Rated malware |" + extra)
+    print("|---|---:|---:|---:|---:|---:|---:|" + ("---:|" if asked_defender else ""))
     for t in sorted(by_type):
         s = by_type[t]
-        print(f"| {t} | {s['n']} | {s['n'] - s['scanned']} | {pct(s['any'], s['n'])} | {pct(s['no_hash'], s['n'])} | {pct(s['yara'], s['n'])} | {pct(s['malware'], s['n'])} |")
-    print(f"| **all** | **{total['n']}** | **{total['n'] - total['scanned']}** | **{pct(total['any'], total['n'])}** | **{pct(total['no_hash'], total['n'])}** | **{pct(total['yara'], total['n'])}** | **{pct(total['malware'], total['n'])}** |")
+        d = f" {pct(s['defender'], s['n'])} |" if asked_defender else ""
+        print(f"| {t} | {s['n']} | {s['n'] - s['scanned']} | {pct(s['any'], s['n'])} | {pct(s['no_hash'], s['n'])} | {pct(s['yara'], s['n'])} | {pct(s['malware'], s['n'])} |{d}")
+    d = f" **{pct(total['defender'], total['n'])}** |" if asked_defender else ""
+    print(f"| **all** | **{total['n']}** | **{total['n'] - total['scanned']}** | **{pct(total['any'], total['n'])}** | **{pct(total['no_hash'], total['n'])}** | **{pct(total['yara'], total['n'])}** | **{pct(total['malware'], total['n'])}** |{d}")
+    if asked_defender:
+        print("\nWindows Defender was asked about the samples Genra called suspicious (programs, scripts, shortcuts,")
+        print("disk images and archives, as in the app); every other column is Genra alone. Real-time protection was")
+        print("off on the runner: on a user's machine it would already catch many of these when Genra reads them, so")
+        print("the last column is an upper bound on what this layer adds.")
+    print("\nSamples are named `<sha256>.<type>` since 27/11/2026 (before: no extension), so the checks that")
+    print("read the name (scripts, shortcuts, archives) see what a user's machine sees; numbers before that date")
+    print("are not comparable for those types.")
     print(f"\nClean files scanned: {clean_n}; false positives: **{len(fp)}**.")
     for p, rules in fp[:50]:
         print(f"- `{p}`: {', '.join(rules)}")
@@ -97,7 +117,7 @@ def main() -> None:
     if missed_families:
         print("\nMost-missed families:", ", ".join(f"{k} ({v})" for k, v in missed_families.most_common(10)))
     if a.json:
-        json.dump({"by_type": by_type, "total": total, "clean": clean_n, "false_positives": len(fp), "yara_false_positive_rules": dict(yara_fp)}, open(a.json, "w"), indent=1)
+        json.dump({"by_type": by_type, "total": total, "defender": asked_defender, "naming": "sha256.type", "clean": clean_n, "false_positives": len(fp), "yara_false_positive_rules": dict(yara_fp)}, open(a.json, "w"), indent=1)
 
 
 if __name__ == "__main__":

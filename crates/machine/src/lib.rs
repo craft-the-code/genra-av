@@ -6,6 +6,7 @@
 //!   file, and the runner that stops cleanly and rolls back when a step fails.
 //! - [`office`]: is Excel running, which workbooks are open, and asking it (politely) to close.
 //! - [`health`]: Defender / Gatekeeper, updates, firewall and the Office macro setting.
+//! - [`defender`]: Microsoft Defender's opinion on a file Genra calls suspicious (Windows).
 //! - [`startup`]: what starts with the machine, and which of those look wrong.
 //!
 //! Rules kept everywhere: documents are only parsed, never opened in an app; every helper
@@ -13,6 +14,7 @@
 //! admin rights; user data is never deleted (it goes through quarantine and the journal).
 
 pub mod attrs;
+pub mod defender;
 pub mod health;
 pub mod journal;
 pub mod office;

@@ -32,6 +32,9 @@ jobs:
           persist-credentials: false
       - name: Test engine, machine layer and CLI
         run: cargo test --locked -p genra-av-core -p genra-av-machine -p genra-av
+      - name: Real Defender check, with its output (asked, or why it was skipped)
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p genra-av-machine real_defender -- --nocapture
       - name: Clippy
         run: cargo clippy --locked -p genra-av-core -p genra-av-machine -p genra-av --all-targets -- -D warnings
       - name: Pack scripts (standard library tests)

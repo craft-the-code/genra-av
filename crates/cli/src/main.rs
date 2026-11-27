@@ -39,6 +39,10 @@ enum Cmd {
         /// One JSON report per line instead of text.
         #[arg(long)]
         json: bool,
+        /// Ask Windows Defender about files Genra calls suspicious, as the app does (Windows,
+        /// Defender on). Defender only reports; it does not move the file.
+        #[arg(long)]
+        defender: bool,
     },
     /// Scan the places threats arrive: Downloads, Desktop, Documents, Zalo received files,
     /// Excel startup folders and removable drives. Remembers clean files between runs.
@@ -133,7 +137,7 @@ fn main() {
 
 fn run() -> Result<bool> {
     match Cli::parse().cmd {
-        Cmd::Scan { paths, rules, pubkey, unsigned, json } => {
+        Cmd::Scan { paths, rules, pubkey, unsigned, json, defender } => {
             let pack = load_pack(rules.as_deref(), pubkey.as_deref(), unsigned, true)?;
             let rep = load_reputation(pack.as_ref(), rules.as_deref());
             describe(pack.as_ref(), &rep);
@@ -146,7 +150,7 @@ fn run() -> Result<bool> {
                     if !entry.file_type().is_file() {
                         continue;
                     }
-                    found |= scan_one(entry.path(), pack.as_ref(), Some(&rep), json);
+                    found |= scan_one(entry.path(), pack.as_ref(), Some(&rep), json, defender);
                 }
             }
             Ok(found)
@@ -179,9 +183,15 @@ fn run() -> Result<bool> {
             );
             let q = if quarantine { Some(Quarantine::open(data.join("quarantine"))?) } else { None };
             let mut hits = summary.hits;
+            let mut budget = genra_av_machine::defender::Budget::new();
             for hit in &mut hits {
                 // A validly signed program is never quarantined on a hash match alone (ADR 0004).
                 genra_av_machine::rails::signed_file_rail(&mut hit.report, &hit.path);
+                // Windows Defender's opinion on what Genra calls suspicious (ADR 0004, layer 4).
+                let disabled = pack.as_ref().map(|p| p.disabled.as_slice()).unwrap_or(&[]);
+                if budget.open(None) {
+                    budget.record(genra_av_machine::defender::second_opinion(&mut hit.report, &hit.path, disabled));
+                }
             }
             for hit in &hits {
                 print_report(&hit.path, &hit.report);
@@ -389,7 +399,7 @@ fn describe(pack: Option<&Pack>, rep: &Reputation) {
     }
 }
 
-fn scan_one(path: &Path, pack: Option<&Pack>, rep: Option<&Reputation>, json: bool) -> bool {
+fn scan_one(path: &Path, pack: Option<&Pack>, rep: Option<&Reputation>, json: bool, defender: bool) -> bool {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size > MAX_FILE {
         if !json {
@@ -405,7 +415,12 @@ fn scan_one(path: &Path, pack: Option<&Pack>, rep: Option<&Reputation>, json: bo
         }
     };
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let report = genra_av_core::scan_named(&name, &bytes, pack, rep);
+    let mut report = genra_av_core::scan_named(&name, &bytes, pack, rep);
+    if defender {
+        if let Ok(abs) = std::path::absolute(path) {
+            genra_av_machine::defender::second_opinion(&mut report, &abs, pack.map(|p| p.disabled.as_slice()).unwrap_or(&[]));
+        }
+    }
     let bad = report.verdict.is_some_and(|v| v >= Severity::Suspicious);
     if json {
         let mut v = serde_json::to_value(&report).unwrap_or_default();

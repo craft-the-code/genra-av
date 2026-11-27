@@ -107,7 +107,7 @@ export interface HitItem { path: string; name: string; verdict?: Severity; famil
 export interface QuarantineItem { id: string; original_path: string; sha256: string; size: number; reason: string; quarantined_at: number }
 export interface HistoryView { entries: Entry[]; other_quarantine: QuarantineItem[] }
 
-export interface Progress { phase: "walking" | "waiting"; folder: string; files: number }
+export interface Progress { phase: "walking" | "waiting" | "defender"; folder: string; files: number }
 export interface QuickResult { at: number; scope: "quick" | "full" | "folder"; stopped: boolean; files_seen: number; files_read: number; files_cached: number; roots: string[]; hits: ScanResult[] }
 
 export type HealthStatus = "ok" | "warn" | "bad" | "unknown";

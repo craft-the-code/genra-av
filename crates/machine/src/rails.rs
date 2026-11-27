@@ -41,7 +41,7 @@ pub fn signed_file_rail(report: &mut Report, path: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn validly_signed(path: &Path) -> bool {
+pub(crate) fn validly_signed(path: &Path) -> bool {
     use std::time::Duration;
     let p = path.display().to_string();
     let Ok(o) = crate::proc::powershell(&crate::startup::signature_script(&[], std::slice::from_ref(&p)), Duration::from_secs(30)) else {
@@ -52,7 +52,7 @@ fn validly_signed(path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-fn validly_signed(_path: &Path) -> bool {
+pub(crate) fn validly_signed(_path: &Path) -> bool {
     false
 }
 

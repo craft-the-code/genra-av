@@ -7,17 +7,20 @@ use crate::packs::Loaded;
 use crate::ScanResult;
 use genra_av_core::rules::Severity;
 use genra_av_core::scanner::{self, Cache, Summary};
+use genra_av_machine::defender::{self, Budget, Outcome};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const PERMISSION_WAIT: Duration = Duration::from_secs(3);
+
 const EMIT_EVERY: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
-    /// `walking`, or `waiting` while a folder read is blocked (permission prompt).
+    /// `walking`, `waiting` while a folder read is blocked (permission prompt), or `defender`
+    /// while Windows Defender is asked about a suspicious file (`folder` is then that file).
     pub phase: &'static str,
     pub folder: String,
     pub files: u64,
@@ -60,10 +63,19 @@ pub fn hash_only(r: &genra_av_core::Report) -> bool {
 }
 
 /// The report as the app acts on it: scanned, then the safety rails (a validly signed program is
-/// never quarantined on a hash match alone).
-pub fn checked(mut report: genra_av_core::Report, path: &Path) -> genra_av_core::Report {
+/// never quarantined on a hash match alone), then Windows Defender's opinion when Genra calls
+/// the file suspicious (ADR 0004, layer 4).
+pub fn checked(report: genra_av_core::Report, path: &Path, rules: &Loaded) -> genra_av_core::Report {
+    checked_with(report, path, rules, true).0
+}
+
+/// [`checked`], asking Defender only when `defender` is true. Also says what asking did.
+fn checked_with(mut report: genra_av_core::Report, path: &Path, rules: &Loaded, defender: bool) -> (genra_av_core::Report, Outcome) {
     genra_av_machine::rails::signed_file_rail(&mut report, path);
-    report
+    let disabled = &rules.pack.disabled;
+    // Past the scan's budget, an answer Defender already gave is still used: it costs nothing.
+    let outcome = if defender { defender::second_opinion(&mut report, path, disabled) } else { defender::remembered_opinion(&mut report, path, disabled) };
+    (report, outcome)
 }
 
 /// What to walk and how: the folders, their depth and skips, and the stop flag.
@@ -104,12 +116,20 @@ pub fn run_job(data: &Path, rules: &Loaded, job: &Job, emit: impl Fn(Progress)) 
     }
     let _ = std::fs::create_dir_all(data);
     let _ = ctx.cache.save(&cache_path);
+    // A few files at most, two minutes in all, none after one failure or "Dừng"; the rest keep
+    // Genra's own verdict and are asked about when the user opens them.
+    let mut budget = Budget::new();
     let hits = total
         .hits
         .into_iter()
         .map(|h| {
             let size = std::fs::metadata(&h.path).map(|m| m.len()).unwrap_or(0);
-            let report = checked(h.report, &h.path);
+            let ask = budget.open(job.walk.stop);
+            if ask && cfg!(windows) && defender::enabled(&rules.pack.disabled) && defender::wants(&h.report, &h.path) {
+                emit(Progress { phase: "defender", folder: h.path.to_string_lossy().into_owned(), files: seen });
+            }
+            let (report, outcome) = checked_with(h.report, &h.path, rules, ask);
+            budget.record(outcome);
             let hash_only = hash_only(&report);
             ScanResult { name: crate::util::file_name(&h.path), path: h.path.to_string_lossy().into_owned(), size, hash_only, report }
         })
