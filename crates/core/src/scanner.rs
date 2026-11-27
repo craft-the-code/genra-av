@@ -174,12 +174,14 @@ pub struct Walk<'a> {
     pub skip: &'a [PathBuf],
     /// Checked before each folder; when set, the walk returns what it has so far.
     pub stop: Option<&'a AtomicBool>,
+    /// Roots under which hidden folders are walked too (USB sticks).
+    pub hidden_ok: &'a [PathBuf],
 }
 
 impl Walk<'_> {
     /// The quick scan: a few known folders, not deep.
     pub fn quick() -> Walk<'static> {
-        Walk { max_depth: MAX_DEPTH, skip: &[], stop: None }
+        Walk { max_depth: MAX_DEPTH, skip: &[], stop: None, hidden_ok: &[] }
     }
 }
 
@@ -209,7 +211,8 @@ pub fn walk_with(ctx: &mut Context, roots: &[PathBuf], opts: &Walk, mut progress
                 continue;
             }
             if ft.is_dir() {
-                if depth < opts.max_depth && !targets::skip_dir(&path) && !opts.skip.iter().any(|s| same_dir(s, &path)) {
+                let hidden_ok = opts.hidden_ok.iter().any(|r| path.starts_with(r));
+                if depth < opts.max_depth && !targets::skip_dir_in(&path, hidden_ok) && !opts.skip.iter().any(|s| same_dir(s, &path)) {
                     stack.push((path, depth + 1));
                 }
             } else if ft.is_file() && (targets::interesting(&path) || targets::in_startup_folder(&path)) {
@@ -375,15 +378,32 @@ mod tests {
         std::fs::write(sys.join("b.docx"), b"x").unwrap();
         let mut ctx = Context::new(None, None, Cache::default());
         let skip = [sys.clone()];
-        let opts = Walk { max_depth: DEEP, skip: &skip, stop: None };
+        let opts = Walk { max_depth: DEEP, skip: &skip, stop: None, hidden_ok: &[] };
         let s = walk_with(&mut ctx, std::slice::from_ref(&root), &opts, |_| {});
         assert_eq!(s.files_seen, 1, "the skipped folder is not walked");
         assert!(!s.stopped);
         let stop = AtomicBool::new(true);
-        let opts = Walk { max_depth: DEEP, skip: &[], stop: Some(&stop) };
+        let opts = Walk { max_depth: DEEP, skip: &[], stop: Some(&stop), hidden_ok: &[] };
         let s = walk_with(&mut ctx, std::slice::from_ref(&root), &opts, |_| {});
         assert!(s.stopped);
         assert_eq!(s.files_seen, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hidden_folders_are_walked_only_under_allowed_roots() {
+        let root = tmp("hidden-ok");
+        let hid = root.join(".worm");
+        std::fs::create_dir_all(&hid).unwrap();
+        std::fs::write(hid.join("a.xls"), b"x").unwrap();
+        let mut ctx = Context::new(None, None, Cache::default());
+        let s = walk(&mut ctx, std::slice::from_ref(&root), |_| {});
+        assert_eq!(s.files_seen, 0, "hidden folders are skipped by default");
+        let ok = [root.clone()];
+        let opts = Walk { max_depth: DEEP, skip: &[], stop: None, hidden_ok: &ok };
+        let s = walk_with(&mut ctx, std::slice::from_ref(&root), &opts, |_| {});
+        assert_eq!(s.files_seen, 1, "a USB root walks its hidden folders");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -149,6 +149,52 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
             auto_quarantine: true,
         });
     }
+    // An Auto_Open name alone runs nothing: report XLM only when there is a macro sheet, or the
+    // name sits beside VBA it would start.
+    let sheets = facts.xlm.iter().any(|x| x.starts_with("Excel 4.0 macro sheet"));
+    if sheets || (!facts.xlm.is_empty() && !facts.vba.is_empty()) {
+        let runs = facts.xlm.iter().any(|x| x.contains("runs a macro"));
+        out.push(Finding {
+            rule: if runs { "builtin.xlm_autorun" } else { "builtin.xlm_macro" }.into(),
+            family: "macro".into(),
+            severity: Severity::Suspicious,
+            message_vi: if runs {
+                "Tệp có macro Excel 4.0 tự chạy khi mở: kiểu macro cũ mà phần mềm độc hại hay dùng để né quét."
+            } else {
+                "Tệp có trang macro Excel 4.0: kiểu macro cũ mà phần mềm độc hại hay dùng để né quét."
+            }
+            .into(),
+            message_en: Some(
+                if runs {
+                    "The file has Excel 4.0 macros that run when it opens: an old macro type malware uses to avoid scanners."
+                } else {
+                    "The file has an Excel 4.0 macro sheet: an old macro type malware uses to avoid scanners."
+                }
+                .into(),
+            ),
+            auto_quarantine: true,
+        });
+    }
+    if facts.workbook_encrypted {
+        out.push(Finding {
+            rule: "builtin.workbook_encrypted".into(),
+            family: "macro".into(),
+            severity: Severity::Info,
+            message_vi: "Tệp Excel có mật khẩu nên Genra không kiểm được macro Excel 4.0 bên trong.".into(),
+            message_en: Some("The Excel file is password-protected, so Genra cannot check it for Excel 4.0 macros.".into()),
+            auto_quarantine: false,
+        });
+    }
+    if !facts.remote_templates.is_empty() {
+        out.push(Finding {
+            rule: "builtin.remote_template".into(),
+            family: "remote_template".into(),
+            severity: Severity::Suspicious,
+            message_vi: "Tệp tự tải nội dung từ ngoài máy khi mở: cách hay dùng để kéo mã độc về.".into(),
+            message_en: Some("The file loads content from outside the computer when it opens: a common way to pull in malware.".into()),
+            auto_quarantine: true,
+        });
+    }
     if facts.vba.is_empty() {
         return out;
     }

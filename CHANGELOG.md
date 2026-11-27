@@ -6,6 +6,19 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 ## [Unreleased]
 
 ### Added
+- Detection: Excel 4.0 (XLM) macro sheets in .xls (also embedded in Word files) and .xlsx/.xlsm, and
+  Auto_Open-style names when a macro sheet or VBA is there to run (`builtin.xlm_macro`,
+  `builtin.xlm_autorun`); documents that fetch a template, frame or linked OLE object from the web, an
+  MHTML address or a network share when opened (`builtin.remote_template`, relationship parts in UTF-8
+  or UTF-16). Local paths (`C:\…`, `file:///C:/…`, `file://localhost/…`) are not flagged. All are
+  "suspicious". An encrypted .xls cannot be checked for XLM and is noted for information only.
+- Scans walk hidden folders and the recycle bin folders on removable drives, where USB worms hide
+  their copies.
+
+### Fixed
+- Decompression is charged to the read budget even when a zip member fails part way, so a package of
+  oversized members cannot keep the scanner busy; relationship parts and Workbook streams are read on
+  their own small budgets and can no longer make a real VBA project look unreadable.
 - Scan progress bar, scaled by the last finished scan of the same kind (a moving bar otherwise).
 - Roadmap (`docs/roadmap.md`) and code signing policy (`docs/signing.md`).
 - Update dialog "Genra AV Updater": headline, summary and "Có gì mới" in the user's language;

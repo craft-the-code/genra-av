@@ -181,6 +181,7 @@
   "family.Kangatang": "Excel worm",
   "family.downloader": "Macro that downloads programs",
   "family.macro": "Suspicious macro",
+  "family.remote_template": "Loads a template from outside",
   "machine.title": "Your computer",
   "machine.health": "Health",
   "machine.rules": "Genra's rules",
