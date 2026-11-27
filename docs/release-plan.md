@@ -73,7 +73,9 @@ certificate covers them: `genra-api.craftthecode.dev` (Worker), `genra-dl.craftt
 
 - **Chính sách quyền riêng tư / Privacy policy**, written to Nghị định 13/2023/NĐ-CP: what is
   collected (nothing by default; hashes if opted in; reports and VBA-only samples when the user
-  sends them), purpose, retention, the user's rights, contact.
+  sends them), purpose, retention, the user's rights, contact. It also says that for a suspicious
+  file that is not an Office document Genra asks Windows Defender, when Defender is on, and that
+  Defender may send that file to Microsoft under its own sample-submission setting (ADR 0004, layer 4).
 - **Điều khoản sử dụng / Terms**: free software, no warranty, a companion to Windows Defender and not a
   replacement, limits of liability, how rule packs and updates work.
 - In the app: links in About, first-run screen with the opt-in for hash reports (default off).

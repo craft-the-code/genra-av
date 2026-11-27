@@ -91,6 +91,30 @@ quarantine anything.
   Defender follows its own settings: with "automatic sample submission" on (the Windows default),
   Defender may upload a suspicious file to Microsoft. The privacy policy says so.
 
+As built (step 4, `crates/machine/src/defender.rs`):
+
+- Asked: a file whose verdict is exactly suspicious (nothing on it already quarantines it), that is
+  not an Office document, when `Get-MpComputerStatus` says the antivirus is on and in normal mode.
+  Passive mode means another antivirus is in charge, which the user chose: Defender is not asked.
+  Office documents are left out: their macros have Genra's own "Dọn sạch giúp tôi" (data kept),
+  and a document is the file most likely to carry the user's own data to Microsoft's sample
+  submission.
+- Only Defender's malware categories raise the verdict: Trojan (and its Downloader, Dropper, Spy,
+  Proxy, Clicker, Notifier kinds), Backdoor, Worm, Virus, Ransom, PWS, Spyware. HackTool, PUA,
+  RemoteAccess, Program, Exploit and the rest are shown as one more suspicious finding: those are
+  often tools an office uses on purpose (AnyDesk, PsExec). A detection whose name cannot be read
+  does not raise it either. Defender finding nothing never clears Genra's own finding.
+- The name is read by its shape (`Category:Platform/Family…`), not by MpCmdRun's label, which may
+  be translated; exit code 0 is clean, 2 is a detection, anything else is no answer.
+- The finding's rule id is `defender.` plus the name with `:`, `/`, `!` as `_` (what reports and
+  `pack.disabled` accept); `disabled: ["defender"]` switches the layer off.
+- One quick scan asks Defender about 20 files at most (a few seconds each); the window says
+  "đang hỏi thêm Windows Defender" meanwhile. An answer is kept for the session by SHA-256, so
+  opening the file or pressing "Dọn sạch giúp tôi" does not ask again.
+- Measured with `detection-report` and its `defender` input: the malware scan runs on Windows with
+  `scan --defender` (real-time protection and sample submission off on that runner), and the
+  report adds "Raised to malware by Defender", every other column staying Genra alone.
+
 ### What quarantines, what asks
 
 | Evidence | Verdict | Action |
