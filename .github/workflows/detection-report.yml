@@ -15,8 +15,8 @@ on:
   workflow_dispatch:
     inputs:
       per_type:
-        description: Samples per file type
-        default: "40"
+        description: Samples per file type (MalwareBazaar has a daily download quota)
+        default: "20"
   schedule:
     - cron: "17 3 * * 1"
 
@@ -53,7 +53,7 @@ jobs:
       - name: Fetch samples
         env:
           ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
-          PER_TYPE: ${{ inputs.per_type || '40' }}
+          PER_TYPE: ${{ inputs.per_type || '20' }}
         run: |
           # shellcheck disable=SC2086
           python3 scripts/eval/fetch_malware.py "$RUNNER_TEMP/zips" "$PER_TYPE" $TYPES

