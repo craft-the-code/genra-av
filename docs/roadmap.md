@@ -33,23 +33,34 @@ Catch and clean the common malware people get, not only Office macros, while sta
 - [x] Excel 4.0 macros, remote templates, hidden folders on USB sticks (PR #20).
 - [x] 1a. Measurement harness: weekly report, first run 27/11: 570 recent samples, 43 % caught
       (13 % without hash lists), 3 % rated malware; 0 false positives on 21 713 clean files.
-- [ ] 1b. Graded hash reputation: trusted families quarantine, re-checked at signing, signed-file rail.
+- [x] 1b. Graded hash reputation: trusted families quarantine, re-checked at signing, signed-file rail (#24).
+      URLhaus payloads and ThreatFox SHA-256 IOCs for the untrusted list (#37; its workflow step
+      waits for a push with the `workflow` scope). Still open: the 90-day window on the pack's list.
 - [x] 2. Inside archives; scripts, shortcuts, double extensions (#25); USB worm clean-up that
       unhides the real folders (#26).
 - [x] 2b. Disinfection on the machine: stop the running threat, switch off what starts it (Run, Startup folder, scheduled tasks), lift Task Manager / Registry Editor / Folder Options locks. Defender exclusions need admin rights: open, waits for a decision on an elevated helper.
 - [x] 3. YARA rules for families (boreal engine; ~3 100 rules from licensed sets, rebuilt and re-checked at signing; all suspicious until the clean corpus clears a rule).
 - [x] 4. Windows Defender as a second opinion on suspicious files (programs, scripts, shortcuts, images and archives only; malware categories only raise the verdict; signed programs still ask; `scan --defender` and the report's Defender column measure it).
-- [ ] 5. Online lookup by hash prefix (k-anonymity), with the privacy policy change.
+- [ ] 5. Online lookup by hash prefix (k-anonymity), with the privacy policy change. Built and switched
+      off (#38): backend endpoint, client, setting. Waits on the policy text (docs/legal/online-lookup.md,
+      Hoan + lawyer), then loading `known_bad` and flipping `lookup::AVAILABLE`.
 
-## Next (0.2–0.3): reach and fewer steps
+## Next (0.3): reach and fewer steps
 
-- Folder guard: watch Downloads, Zalo and USB sticks live, scan on arrival, notify only when something
-  is found (J1, J8 in usability-audit.md). Today "Canh gác" is shown as "sắp có".
-- Explorer / Finder context menu "Kiểm tra bằng Genra AV" (J1: one action).
-- Hidden folders on USB sticks (worms hide copies there).
-- Scanner findings for Excel 4.0 (XLM) macro sheets and remote templates in .docx.
-- "Soạn lời nhắn": a ready message to tell the sender their file is infected (mock 5).
-- Threat screen shows the computed repair plan before the press.
+Open as PRs #31 to #38 (27/11), stacked in that order; none merged yet.
+
+- [x] Folder guard: Downloads, Zalo and USB sticks watched live while Genra runs, scan on arrival,
+      notify only when something is found (J1, J8; #35). Tray, close-to-tray and "Mở cùng máy" so it
+      runs without the window (#36). Not yet: the separate `genra-guard` process of ADR 0003, and
+      moving malware aside automatically from the guard.
+- [x] Explorer context menu "Kiểm tra bằng Genra AV" with one running Genra (#34). Not yet: the
+      Windows 11 top-level menu (needs a signed sparse package), macOS Finder.
+- [x] Hidden folders on USB sticks (worms hide copies there) (#20, #26).
+- [x] Scanner findings for Excel 4.0 (XLM) macro sheets and remote templates in .docx (#20).
+- [x] "Soạn lời nhắn": a ready message to tell the sender their file is infected (mock 5; #33).
+- [x] Threat screen shows the computed repair plan before the press (#32).
+- [x] Dependencies brought up to date (#31). Left for their own PRs: `zip` 2 → 9 (API change in the
+      archive reader), `reqwest` 0.13 (waits for the Tauri updater).
 
 ## Later
 

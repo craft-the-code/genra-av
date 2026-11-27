@@ -54,6 +54,24 @@ Test files: use a **copy** of a known infected sample (Kangatang .xls) kept in a
 - [ ] "Quét tuỳ chọn…" → "Thêm thư mục" picks two folders at once; (x) removes one; scanning the other,
       which holds a copy of the infected file, lists it under "Tệp tìm thấy".
 
+## 5b. Right-click, guard, tray (0.3)
+
+- [ ] The threat screen first shows the general plan with "Genra đang xem cụ thể…", then the real
+      steps (the file, `mypersonnel.xls` in XLSTART, the other infected workbooks) before any press.
+- [ ] After "Dọn sạch giúp tôi": "Soạn lời nhắn" → the message names the file; "Sao chép lời nhắn"
+      → paste into Notepad shows the same text.
+- [ ] Right-click the infected copy in File Explorer → "Show more options" → "Kiểm tra bằng Genra AV"
+      opens Genra on its result. With Genra already open, the same menu brings that window to the
+      front instead of opening a second one. Turning the switch off in Cài đặt removes the entry.
+- [ ] Sidebar says "Đang canh gác". Copy the infected file into Downloads → within a few seconds a
+      Windows notification "Genra AV tìm thấy mã độc"; the file is listed under "Tệp tìm thấy".
+      A clean .docx copied there gives no notification.
+- [ ] Plug in a USB stick holding a copy → sidebar shows "Đang quét USB E:", then a notification.
+- [ ] Close the window with the guard on → a notification says Genra keeps guarding; the tray icon
+      opens it again; "Thoát Genra AV" in the tray menu quits.
+- [ ] Sign out and in → Genra starts in the tray with no window (Cài đặt → "Mở cùng máy" on).
+- [ ] Uninstall (NSIS) → the right-click entry is gone.
+
 ## 6. Update and uninstall
 
 - [ ] Updates reach official releases only (GitHub's `releases/latest` skips pre-releases). After
