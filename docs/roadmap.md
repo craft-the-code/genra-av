@@ -26,6 +26,20 @@ Kangatang worm with no help (usability-audit.md: 5/5 testers, under 60 s, no que
 - [ ] Landing page download buttons on (`GENRA_RELEASED = true`) once 1.0 is out.
 - [ ] Legal pages reviewed by a lawyer (`GENRA_LEGAL_DRAFT` stays true until then).
 
+## Detection and disinfection (ADR 0004, accepted 27/11)
+
+Catch and clean the common malware people get, not only Office macros, while staying light.
+
+- [x] Excel 4.0 macros, remote templates, hidden folders on USB sticks (PR #20).
+- [ ] 1. Graded hash reputation (trusted families quarantine) and the measurement harness: detection
+      rate per file type, false positives on a clean corpus, published per release.
+- [ ] 2. Inside archives; scripts, shortcuts, double extensions; USB worm pattern, and USB
+      disinfection that unhides the real folders.
+- [ ] 2b. Disinfection on the machine: startup entries, running process, Defender exclusions.
+- [ ] 3. YARA-X engine with rule sets we may redistribute.
+- [ ] 4. Windows Defender as a second opinion on suspicious files.
+- [ ] 5. Online lookup by hash prefix (k-anonymity), with the privacy policy change.
+
 ## Next (0.2–0.3): reach and fewer steps
 
 - Folder guard: watch Downloads, Zalo and USB sticks live, scan on arrival, notify only when something
