@@ -99,7 +99,10 @@ def main() -> None:
     d = f" **{pct(total['defender'], total['n'])}** |" if asked_defender else ""
     print(f"| **all** | **{total['n']}** | **{total['n'] - total['scanned']}** | **{pct(total['any'], total['n'])}** | **{pct(total['no_hash'], total['n'])}** | **{pct(total['yara'], total['n'])}** | **{pct(total['malware'], total['n'])}** |{d}")
     if asked_defender:
-        print("\nWindows Defender was asked about the samples Genra called suspicious; every other column is Genra alone.")
+        print("\nWindows Defender was asked about the samples Genra called suspicious (programs, scripts, shortcuts,")
+        print("disk images and archives, as in the app); every other column is Genra alone. Real-time protection was")
+        print("off on the runner: on a user's machine it would already catch many of these when Genra reads them, so")
+        print("the last column is an upper bound on what this layer adds.")
     print(f"\nClean files scanned: {clean_n}; false positives: **{len(fp)}**.")
     for p, rules in fp[:50]:
         print(f"- `{p}`: {', '.join(rules)}")

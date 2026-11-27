@@ -74,20 +74,25 @@ jobs:
           # them, and sample submission would upload them (cloud lookups stay on, as on a user's
           # machine). Defender is asked by Genra instead.
           Set-MpPreference -DisableRealtimeMonitoring $true -SubmitSamplesConsent 2
-          Get-MpComputerStatus | Select-Object AntivirusEnabled, AMRunningMode, RealTimeProtectionEnabled, AntivirusSignatureAge | Format-List
+          # Today's signatures, as a user's machine has them.
+          Update-MpSignature -ErrorAction Continue
+          $m = Get-MpComputerStatus
+          $m | Select-Object AntivirusEnabled, AMRunningMode, RealTimeProtectionEnabled, AntivirusSignatureVersion, AntivirusSignatureAge | Format-List
+          # A run that asked nobody must not read as "Defender added nothing".
+          if (-not $m.AntivirusEnabled -or $m.AMRunningMode -ne 'Normal') { Write-Error "Defender is not usable on this runner"; exit 1 }
       - name: Fetch samples
         env:
           ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
           PER_TYPE: ${{ inputs.per_type || '20' }}
         run: |
-          tmp=$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")
+          tmp=$(cygpath -m "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")
           py=$(command -v python3 || command -v python)
           # shellcheck disable=SC2086
           "$py" scripts/eval/fetch_malware.py "$tmp/zips" "$PER_TYPE" $TYPES
       - name: Unpack, scan, delete
         run: |
           set -euo pipefail
-          tmp=$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")
+          tmp=$(cygpath -m "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")
           s="$tmp/samples"
           for d in "$tmp"/zips/*/; do
             t=$(basename "$d")
@@ -95,10 +100,11 @@ jobs:
             for z in "$d"*.zip; do
               [ -e "$z" ] || continue
               sha=$(basename "$z" .zip)
-              # One file per sample, named by its hash so the report can find its family.
+              # One file per sample, named by its hash and its type's extension (the app decides by
+              # extension which files go to Defender, so the measurement must too).
               7z e -y -pinfected -o"$s/$t/tmp" "$z" >/dev/null 2>&1 || { rm -rf "$s/$t/tmp"; continue; }
               f=$(find "$s/$t/tmp" -type f -print -quit)
-              [ -n "$f" ] && mv "$f" "$s/$t/$sha"
+              [ -n "$f" ] && mv "$f" "$s/$t/$sha.$t"
               rm -rf "$s/$t/tmp"
             done
           done
@@ -146,11 +152,11 @@ jobs:
           # Office files without macros, made fresh so nothing in them is ours or borrowed.
           python -m pip install --quiet python-docx==1.1.2 openpyxl==3.1.5
           python scripts/eval/make_clean_office.py clean/office 200
-          ./target/release/genra-av.exe scan $PACK_FLAGS --json clean/office > clean-office.jsonl || true
-          ./target/release/genra-av.exe scan $PACK_FLAGS --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
+          ./target/release/genra-av.exe scan $PACK_FLAGS ${{ inputs.defender && '--defender' || '' }} --json clean/office > clean-office.jsonl || true
+          ./target/release/genra-av.exe scan $PACK_FLAGS ${{ inputs.defender && '--defender' || '' }} --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
           # Shortcuts and scripts Windows and installed programs ship: the false-positive check for
           # the shortcut and script heuristics.
-          ./target/release/genra-av.exe scan $PACK_FLAGS --json \
+          ./target/release/genra-av.exe scan $PACK_FLAGS ${{ inputs.defender && '--defender' || '' }} --json \
             "C:/ProgramData/Microsoft/Windows/Start Menu" "C:/Users/Public/Desktop" \
             "C:/Windows/System32/WindowsPowerShell/v1.0/Modules" "C:/Program Files/WindowsPowerShell/Modules" \
             > clean-scripts.jsonl 2>/dev/null || true
