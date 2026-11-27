@@ -210,7 +210,7 @@
   "settings.theme.dark": "Dark",
   "settings.lang": "Language",
   "settings.privacy": "Privacy",
-  "settings.privacy.text": "Genra reads files on this computer and sends no file anywhere. For a suspicious file (not an Office document) it also asks Windows Defender when Defender is on; Defender may send a sample to Microsoft under its own settings in Windows Security.",
+  "settings.privacy.text": "Genra reads files on this computer and sends no file anywhere. For a suspicious program, script, shortcut or archive it also asks Windows Defender when Defender is on; Defender may send a sample to Microsoft under its own settings in Windows Security.",
   "settings.send_hashes": "Send hashes of detected malware",
   "settings.send_hashes.text": "When Genra finds malware in a file, send its SHA-256 and the rule id (never the file) so Genra learns what is spreading. Off by default.",
   "settings.rules": "Detection rules",

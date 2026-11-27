@@ -7,9 +7,9 @@
 //! Spyware) makes the finding *malware*, with Defender's own name for it; a detection in another
 //! category (hack tools, unwanted software, remote access) is shown but changes nothing.
 //!
-//! Office documents are not sent to Defender: their macros have Genra's own path ("Dọn sạch
-//! giúp tôi" keeps the data), and a document is what Defender's sample submission would upload
-//! with the user's own data in it. Genra sends nothing itself; Defender follows its own settings.
+//! Only programs, scripts, shortcuts, disk images and archives are sent to Defender. Office
+//! documents, PDFs and the like are the user's own data, which Defender's sample submission
+//! could upload; macros have Genra's own path ("Dọn sạch giúp tôi" keeps the data). Genra sends nothing itself; Defender follows its own settings.
 //!
 //! The pack can switch the layer off (`disabled: ["defender"]`) or one Defender name, by its rule
 //! id ([`rule_id`]: `Trojan:Win32/Wacatac.B!ml` is `defender.Trojan_Win32_Wacatac.B_ml`).
@@ -48,33 +48,93 @@ pub enum Said {
     Threat(Option<String>),
 }
 
+/// Kinds of file Defender is asked about: programs, scripts, shortcuts, disk images and
+/// archives (the delivery formats). Anything else (PDFs, documents, text) is the user's own data
+/// and stays away from Defender's sample submission.
+const ASKED: &[&str] = &[
+    "exe", "dll", "scr", "com", "pif", "cpl", "msi", "msp", "ocx", "sys", "js", "jse", "vbs", "vbe", "wsf", "wsh", "hta", "ps1", "psm1", "bat", "cmd", "lnk",
+    "url", "jar", "iso", "img", "vhd", "vhdx", "zip", "rar", "7z", "cab",
+];
+
+/// The layer is on unless the pack switched it off.
+pub fn enabled(disabled: &[String]) -> bool {
+    !disabled.iter().any(|d| d == RULE)
+}
+
+/// A `disabled` entry matches a rule id exactly, or as a prefix when it ends with `*`
+/// (`defender.Trojan_Win32_Wacatac*` switches off the whole family).
+fn switched_off(disabled: &[String], rule: &str) -> bool {
+    disabled.iter().any(|d| d == rule || d.strip_suffix('*').is_some_and(|p| p.starts_with("defender.") && rule.starts_with(p)))
+}
+
 /// True when Genra would ask Defender about this file: something on it is suspicious, nothing on
-/// it already moves it, it is not an Office document, and Defender was not asked yet.
+/// it already moves it, it is a program, script, shortcut, disk image or archive by name and not
+/// an Office file by content, and Defender was not asked yet.
 pub fn wants(report: &Report, path: &Path) -> bool {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     report.verdict == Some(Severity::Suspicious)
         && !report.allowed
         && !report.should_quarantine()
-        && !crate::repair::is_office_document(path)
+        && ASKED.contains(&ext.as_str())
+        // A document renamed to .zip or .exe is still the user's document.
+        && report.kind != genra_av_core::extract::Kind::Ole
+        && report.vba_modules.is_empty()
         && !report.findings.iter().any(|f| f.rule == RULE || f.rule.starts_with("defender."))
         && path.is_absolute()
 }
 
+/// What happened when Genra went to ask Defender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Not a file Defender is asked about, or the layer is off.
+    NotAsked,
+    /// Defender is not this computer's antivirus (off, passive, missing): stop asking.
+    Unavailable,
+    /// Answered from this session's memory, without running Defender.
+    Remembered,
+    /// Defender ran and answered.
+    Answered,
+    /// Defender ran and gave no answer (error, timeout): a scan stops asking after this.
+    Failed,
+}
+
 /// Asks Defender when [`wants`] says so and Defender is on, and adds what it said to the report.
-/// Returns true when Defender was actually run (not answered from this session's memory), so a
-/// caller can bound how many files one scan sends to it.
-pub fn second_opinion(report: &mut Report, path: &Path, disabled: &[String]) -> bool {
-    if disabled.iter().any(|d| d == RULE) || !wants(report, path) {
-        return false;
+/// The outcome lets a caller bound how many files, and how much time, one scan spends on it.
+pub fn second_opinion(report: &mut Report, path: &Path, disabled: &[String]) -> Outcome {
+    if !enabled(disabled) || !wants(report, path) {
+        return Outcome::NotAsked;
     }
-    let Some((said, ran)) = ask(path, &report.sha256) else { return false };
+    let (said, outcome) = match ask(path, &report.sha256) {
+        Asked::Unavailable => return Outcome::Unavailable,
+        Asked::Failed => return Outcome::Failed,
+        Asked::Said(s, ran) => (s, if ran { Outcome::Answered } else { Outcome::Remembered }),
+    };
     apply(report, &said, disabled);
-    ran
+    // Like the signed-file rail: another engine's name alone never moves a validly signed program
+    // (Defender's machine-learning names, `!ml`, are the ones most often wrong). It is still shown
+    // as malware; the user decides.
+    if report.should_quarantine() && report.findings.iter().filter(|f| f.auto_quarantine && f.severity == Severity::Malware).all(|f| f.rule.starts_with("defender.")) && crate::rails::validly_signed(path) {
+        for f in report.findings.iter_mut().filter(|f| f.rule.starts_with("defender.")) {
+            f.auto_quarantine = false;
+        }
+        if !report.findings.iter().any(|f| f.rule == "rail.signed_file") {
+            report.findings.push(Finding {
+                rule: "rail.signed_file".into(),
+                family: "signed".into(),
+                severity: Severity::Info,
+                message_vi: "Tệp có chữ ký số hợp lệ nên Genra không tự cách ly chỉ vì Defender cảnh báo; bạn quyết định.".into(),
+                message_en: Some("The file has a valid digital signature, so Genra does not quarantine it on Defender's word alone; you decide.".into()),
+                auto_quarantine: false,
+            });
+        }
+    }
+    outcome
 }
 
 /// Adds Defender's answer to the report and recomputes the verdict.
 pub fn apply(report: &mut Report, said: &Said, disabled: &[String]) {
     let f = finding(said);
-    if disabled.iter().any(|d| d == &f.rule) {
+    if switched_off(disabled, &f.rule) {
         return;
     }
     report.findings.push(f);
@@ -87,8 +147,9 @@ fn finding(said: &Said) -> Finding {
             rule: "defender.clean".into(),
             family: RULE.into(),
             severity: Severity::Info,
-            message_vi: "Genra đã hỏi thêm Windows Defender: Defender không thấy mã độc trong tệp này.".into(),
-            message_en: Some("Genra also asked Windows Defender: it found no malware in this file.".into()),
+            // Not "no malware": Defender skips what is in its exclusions, which malware adds.
+            message_vi: "Genra đã hỏi thêm Windows Defender: Defender không cảnh báo thêm về tệp này.".into(),
+            message_en: Some("Genra also asked Windows Defender: it gave no further warning about this file.".into()),
             auto_quarantine: false,
         },
         Said::Threat(Some(name)) if is_malware(name) => Finding {
@@ -146,7 +207,15 @@ fn threat_name(token: &str) -> Option<&str> {
 pub fn parse_scan(code: Option<i32>, stdout: &str) -> Option<Said> {
     match code {
         Some(0) => Some(Said::Clean),
-        Some(2) => Some(Said::Threat(stdout.split_whitespace().find_map(threat_name).map(str::to_string))),
+        Some(2) => {
+            // The list marker is not translated; names come after it (the "Scanning <path>" line
+            // before it holds the file name, which a zip entry could shape like a threat name).
+            let list = stdout.find("LIST OF DETECTED THREATS").map(|i| &stdout[i..]).unwrap_or(stdout);
+            let names: Vec<&str> = list.split_whitespace().filter_map(threat_name).collect();
+            // Several detections: a malware name wins over a HackTool listed first.
+            let pick = names.iter().find(|n| is_malware(n)).or(names.first());
+            Some(Said::Threat(pick.map(|n| n.to_string())))
+        }
         _ => None,
     }
 }
@@ -164,6 +233,15 @@ fn parse_status(json: &str) -> Option<String> {
     Some(v.get("dir").and_then(|x| x.as_str()).unwrap_or("").to_string())
 }
 
+/// What [`ask`] got.
+#[cfg_attr(not(windows), allow(dead_code))]
+enum Asked {
+    Unavailable,
+    Failed,
+    /// The answer, and whether Defender ran for it (false: remembered).
+    Said(Said, bool),
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;
@@ -173,12 +251,14 @@ mod imp {
     use std::time::{Duration, Instant};
 
     const STATUS_TTL: Duration = Duration::from_secs(600);
-    const SCAN_TIMEOUT: Duration = Duration::from_secs(90);
+    /// Defender's signatures update several times a day; an answer is not kept longer.
+    const ANSWER_TTL: Duration = Duration::from_secs(4 * 3600);
+    pub const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
 
     static STATUS: Mutex<Option<(Instant, Option<PathBuf>)>> = Mutex::new(None);
-    /// sha256 → what Defender said, for this session: a file asked about during the scan is not
+    /// sha256 → what Defender said, for a few hours: a file asked about during the scan is not
     /// sent again when the user opens it or presses "Dọn sạch giúp tôi".
-    static SAID: Mutex<Option<HashMap<String, Said>>> = Mutex::new(None);
+    static SAID: Mutex<Option<HashMap<String, (Instant, Said)>>> = Mutex::new(None);
 
     const STATUS_SCRIPT: &str = "$o=@{};\
         try{$m=Get-MpComputerStatus -ErrorAction Stop;$o.av=[bool]$m.AntivirusEnabled;$o.mode=[string]$m.AMRunningMode}catch{};\
@@ -186,8 +266,8 @@ mod imp {
         $o|ConvertTo-Json -Compress";
 
     /// MpCmdRun.exe when Defender is on; looked up once every ten minutes.
-    fn mpcmdrun() -> Option<PathBuf> {
-        let mut g = STATUS.lock().ok()?;
+    pub fn mpcmdrun() -> Option<PathBuf> {
+        let mut g = STATUS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, p)) = g.as_ref() {
             if at.elapsed() < STATUS_TTL {
                 return p.clone();
@@ -197,25 +277,31 @@ mod imp {
             // The platform folder Defender updates itself into, then the one Windows ships.
             let platform = Some(PathBuf::from(dir).join("MpCmdRun.exe")).filter(|p| p.is_absolute() && p.is_file());
             platform.or_else(|| {
-                std::env::var_os("ProgramFiles").map(|pf| PathBuf::from(pf).join("Windows Defender").join("MpCmdRun.exe")).filter(|p| p.is_file())
+                std::env::var_os("ProgramW6432")
+                    .or_else(|| std::env::var_os("ProgramFiles"))
+                    .map(|pf| PathBuf::from(pf).join("Windows Defender").join("MpCmdRun.exe"))
+                    .filter(|p| p.is_file())
             })
         });
         *g = Some((Instant::now(), found.clone()));
         found
     }
 
-    pub fn ask(path: &Path, sha256: &str) -> Option<(Said, bool)> {
-        if let Some(s) = SAID.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(sha256).cloned())) {
-            return Some((s, false));
+    pub(super) fn ask(path: &Path, sha256: &str) -> Asked {
+        {
+            let g = SAID.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, s)) = g.as_ref().and_then(|m| m.get(sha256)) {
+                if at.elapsed() < ANSWER_TTL {
+                    return Asked::Said(s.clone(), false);
+                }
+            }
         }
-        let mp = mpcmdrun()?;
-        let file = path.to_str()?;
-        let out = crate::proc::run(mp.to_str()?, &["-Scan", "-ScanType", "3", "-File", file, "-DisableRemediation"], SCAN_TIMEOUT).ok()?;
-        let said = parse_scan(out.status, &out.stdout)?;
-        if let Ok(mut g) = SAID.lock() {
-            g.get_or_insert_with(HashMap::new).insert(sha256.to_string(), said.clone());
-        }
-        Some((said, true))
+        let Some(mp) = mpcmdrun() else { return Asked::Unavailable };
+        let (Some(mp), Some(file)) = (mp.to_str(), path.to_str()) else { return Asked::Failed };
+        let Ok(out) = crate::proc::run(mp, &["-Scan", "-ScanType", "3", "-File", file, "-DisableRemediation"], SCAN_TIMEOUT) else { return Asked::Failed };
+        let Some(said) = parse_scan(out.status, &out.stdout) else { return Asked::Failed };
+        SAID.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(sha256.to_string(), (Instant::now(), said.clone()));
+        Asked::Said(said, true)
     }
 }
 
@@ -223,8 +309,48 @@ mod imp {
 use imp::ask;
 
 #[cfg(not(windows))]
-fn ask(_path: &Path, _sha256: &str) -> Option<(Said, bool)> {
-    None
+fn ask(_path: &Path, _sha256: &str) -> Asked {
+    Asked::Unavailable
+}
+
+/// A bounded run of second opinions for one scan: at most [`Budget::FILES`] files and
+/// [`Budget::TIME`] in all, none after Defender failed once or turned out to be off, none once
+/// the user pressed "Dừng".
+pub struct Budget {
+    started: std::time::Instant,
+    tried: usize,
+    done: bool,
+}
+
+impl Budget {
+    pub const FILES: usize = 20;
+    pub const TIME: std::time::Duration = std::time::Duration::from_secs(120);
+
+    pub fn new() -> Budget {
+        Budget { started: std::time::Instant::now(), tried: 0, done: false }
+    }
+
+    /// Whether the next file may be sent to Defender.
+    pub fn open(&self, stop: Option<&std::sync::atomic::AtomicBool>) -> bool {
+        !self.done && self.tried < Self::FILES && self.started.elapsed() < Self::TIME && !stop.is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn record(&mut self, o: Outcome) {
+        match o {
+            Outcome::Answered => self.tried += 1,
+            Outcome::Failed | Outcome::Unavailable => {
+                self.tried += 1;
+                self.done = true;
+            }
+            Outcome::NotAsked | Outcome::Remembered => {}
+        }
+    }
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Budget::new()
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +380,10 @@ mod tests {
         let vi = "Mối đe dọa              : Virus:DOS/EICAR_Test_File\r\n    tệp : C:/Temp/a.com http://x/y";
         assert_eq!(parse_scan(Some(2), vi), Some(Said::Threat(Some("Virus:DOS/EICAR_Test_File".into()))));
         assert_eq!(parse_scan(Some(2), "found 1 threats. C:\\a\\b.exe"), Some(Said::Threat(None)));
+        let two = "LIST OF DETECTED THREATS\nThreat : HackTool:Win32/Mimikatz\nThreat : Trojan:Win32/Wacatac.B!ml";
+        assert_eq!(parse_scan(Some(2), two), Some(Said::Threat(Some("Trojan:Win32/Wacatac.B!ml".into()))), "malware wins");
+        let shaped = "Scanning C:\\a.zip->Trojan:Win32/Fake.A found 1 threats.\nLIST OF DETECTED THREATS\nThreat : PUA:Win32/Presenoker";
+        assert_eq!(parse_scan(Some(2), shaped), Some(Said::Threat(Some("PUA:Win32/Presenoker".into()))), "names before the list are not read");
         assert_eq!(parse_scan(Some(1), OUT), None, "an error is no answer");
         assert_eq!(parse_scan(None, OUT), None, "a timeout is no answer");
     }
@@ -297,8 +427,14 @@ mod tests {
         apply(&mut r, &Said::Threat(Some(name.into())), &["defender.Trojan_Win32_Wacatac.B_ml".into()]);
         assert_eq!(r.verdict, Some(Severity::Suspicious));
         let mut r = report(vec![suspicious("x")]);
-        assert!(!second_opinion(&mut r, Path::new("C:\\a.js"), &["defender".into()]));
+        assert_eq!(second_opinion(&mut r, Path::new("C:\\a.js"), &["defender".into()]), Outcome::NotAsked);
         assert_eq!(r.findings.len(), 1);
+        let mut r = report(vec![suspicious("x")]);
+        apply(&mut r, &Said::Threat(Some(name.into())), &["defender.Trojan_Win32_Wacatac*".into()]);
+        assert_eq!(r.verdict, Some(Severity::Suspicious), "a family switched off by prefix");
+        let mut r = report(vec![suspicious("x")]);
+        apply(&mut r, &Said::Threat(Some(name.into())), &["defender.Trojan_Win32_Other*".into()]);
+        assert_eq!(r.verdict, Some(Severity::Malware));
     }
 
     #[test]
@@ -306,8 +442,16 @@ mod tests {
         let abs = if cfg!(windows) { "C:\\Users\\An\\a.js" } else { "/home/an/a.js" };
         assert!(wants(&report(vec![suspicious("x")]), Path::new(abs)));
         assert!(!wants(&report(vec![suspicious("x")]), Path::new("a.js")), "relative path");
-        let doc = if cfg!(windows) { "C:\\Users\\An\\a.xlsm" } else { "/home/an/a.xlsm" };
-        assert!(!wants(&report(vec![suspicious("x")]), Path::new(doc)));
+        let at = |n: &str| if cfg!(windows) { format!("C:\\Users\\An\\{n}") } else { format!("/home/an/{n}") };
+        for kept in ["a.xlsm", "a.pdf", "a.docx", "hoa-don", "a.txt"] {
+            assert!(!wants(&report(vec![suspicious("x")]), Path::new(&at(kept))), "{kept}: the user's own data");
+        }
+        for asked in ["a.exe", "a.lnk", "a.ps1", "a.zip", "a.iso"] {
+            assert!(wants(&report(vec![suspicious("x")]), Path::new(&at(asked))), "{asked}");
+        }
+        let mut renamed = report(vec![suspicious("x")]);
+        renamed.kind = genra_av_core::extract::Kind::Ole;
+        assert!(!wants(&renamed, Path::new(&at("bao-cao.exe"))), "a document renamed to .exe");
         let mut malware = suspicious("pack.rule");
         malware.severity = Severity::Malware;
         malware.auto_quarantine = true;
@@ -328,26 +472,56 @@ mod tests {
         assert_eq!(parse_status(""), None);
     }
 
+    #[test]
+    fn a_scan_stops_asking_after_a_failure_the_cap_or_stop() {
+        let mut b = Budget::new();
+        for _ in 0..Budget::FILES {
+            assert!(b.open(None));
+            b.record(Outcome::Answered);
+        }
+        assert!(!b.open(None), "cap reached");
+        let mut b = Budget::new();
+        b.record(Outcome::Remembered);
+        b.record(Outcome::NotAsked);
+        assert!(b.open(None), "remembered answers cost nothing");
+        b.record(Outcome::Failed);
+        assert!(!b.open(None), "one timeout or error ends the asking");
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        assert!(!Budget::new().open(Some(&stop)), "the user pressed Dừng");
+    }
+
     /// The real Defender, on a Windows machine where it is on: the EICAR test file (built at run
-    /// time so this source is not itself detected) is named as a virus. Skipped where Defender is
-    /// off or real-time protection takes the file first.
+    /// time so this source is not itself detected) is named as a virus. Skipped (and said so in
+    /// the output) only where Defender is off or real-time protection takes the file first.
     #[cfg(windows)]
     #[test]
     fn real_defender_names_the_eicar_test_file() {
+        let Some(mp) = imp::mpcmdrun() else {
+            println!("skipped: Defender is not this machine's antivirus");
+            return;
+        };
         let parts = ["X5O!P%@AP[4\\PZX54(P^)7CC)7}$", "EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"];
         let dir = std::env::temp_dir().join(format!("genra-defender-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("eicar.com");
-        if std::fs::write(&p, parts.concat()).is_err() {
-            eprintln!("skipped: the test file could not be written (Defender took it)");
+        let written = std::fs::write(&p, parts.concat()).is_ok();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if !written || !p.exists() {
+            println!("skipped: real-time protection took the test file");
+            let _ = std::fs::remove_dir_all(&dir);
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        match imp::ask(&p, &"e".repeat(64)) {
-            None if !p.exists() => eprintln!("skipped: real-time protection took the test file"),
-            None => eprintln!("skipped: Defender is off on this machine"),
-            Some((said, _)) => assert!(matches!(&said, Said::Threat(Some(n)) if n.contains("EICAR")), "{said:?}"),
-        }
+        let got = imp::ask(&p, &"e".repeat(64));
+        let gone = !p.exists();
         let _ = std::fs::remove_dir_all(&dir);
+        match got {
+            Asked::Said(Said::Threat(Some(n)), true) => {
+                assert!(n.contains("EICAR"), "{n}");
+                println!("Defender ({}) named the test file {n}", mp.display());
+            }
+            Asked::Said(said, _) => panic!("Defender answered {said:?} for the EICAR file"),
+            _ if gone => println!("skipped: real-time protection took the test file during the scan"),
+            _ => panic!("Defender is on ({}) but gave no answer for the EICAR file", mp.display()),
+        }
     }
 }

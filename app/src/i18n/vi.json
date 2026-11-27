@@ -210,7 +210,7 @@
   "settings.theme.dark": "Tối",
   "settings.lang": "Ngôn ngữ",
   "settings.privacy": "Quyền riêng tư",
-  "settings.privacy.text": "Genra đọc tệp ngay trên máy và không gửi tệp đi đâu. Với tệp đáng ngờ (không phải tài liệu Office), Genra hỏi thêm Windows Defender nếu Defender đang bật; Defender có thể gửi mẫu cho Microsoft theo cài đặt của chính nó trong Bảo mật Windows.",
+  "settings.privacy.text": "Genra đọc tệp ngay trên máy và không gửi tệp đi đâu. Với chương trình, script, lối tắt hay tệp nén đáng ngờ, Genra hỏi thêm Windows Defender nếu Defender đang bật; Defender có thể gửi mẫu cho Microsoft theo cài đặt của chính nó trong Bảo mật Windows.",
   "settings.send_hashes": "Gửi mã băm khi phát hiện mã độc",
   "settings.send_hashes.text": "Khi Genra thấy một tệp có mã độc, gửi mã băm SHA-256 và mã luật (không gửi tệp) để Genra biết loại nào đang lây. Mặc định tắt.",
   "settings.rules": "Luật phát hiện",
