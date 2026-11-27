@@ -147,7 +147,7 @@ fn judge(r: &Raw, sig: Option<&Sig>, pack: Option<&Pack>, rep: Option<&Reputatio
         if !md.is_file() || md.len() > scanner::MAX_FILE {
             return None;
         }
-        std::fs::read(t).ok().map(|b| genra_av_core::scan_with(&b, pack, rep))
+        std::fs::read(t).ok().map(|b| genra_av_core::scan_named(&t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), &b, pack, rep))
     });
     let (verdict, vi, en): (Verdict, String, String) = if let Some(rep) = scanned.as_ref().filter(|s| s.should_quarantine() || s.verdict == Some(Severity::Malware)) {
         let fam = rep.findings.iter().max_by_key(|f| f.severity).map(|f| f.family.clone()).unwrap_or_default();

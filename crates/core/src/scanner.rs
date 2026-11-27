@@ -3,7 +3,7 @@
 
 use crate::reputation::Reputation;
 use crate::rules::{Pack, Severity};
-use crate::{scan_with, targets, Report};
+use crate::{targets, Report};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -97,6 +97,7 @@ pub struct Context<'a> {
 fn rules_fingerprint(pack: Option<&Pack>) -> String {
     let mut h = Sha256::new();
     h.update(env!("CARGO_PKG_VERSION").as_bytes());
+    h.update(crate::ENGINE.to_le_bytes());
     if let Some(p) = pack {
         h.update(serde_json::to_vec(&(&p.rules, &p.disabled, &p.allow_sha256)).unwrap_or_default());
     }
@@ -148,7 +149,8 @@ pub fn scan_file(ctx: &mut Context, path: &Path, summary: &mut Summary) {
     }
     let Ok(bytes) = std::fs::read(path) else { return };
     summary.files_read += 1;
-    let report = scan_with(&bytes, ctx.pack, ctx.reputation);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let report = crate::scan_named(&name, &bytes, ctx.pack, ctx.reputation);
     ctx.cache.entries.insert(
         k,
         Entry {
@@ -236,6 +238,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scan_with;
     use crate::reputation::HashList;
     use crate::rules::HashSetRef;
 
