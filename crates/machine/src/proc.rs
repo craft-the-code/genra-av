@@ -97,7 +97,18 @@ fn base64(bytes: &[u8]) -> String {
 /// A PowerShell single-quoted string literal (`'` doubled), safe for any path.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''").replace(['\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'], "''"))
+    // PowerShell reads ' and the curly single quotes as the same quote: each is doubled as
+    // itself, so the string keeps its value (`Tom’s` stays `Tom’s`).
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
 }
 
 #[cfg(test)]
@@ -118,7 +129,7 @@ mod tests {
     #[test]
     fn ps_quote_doubles_quotes() {
         assert_eq!(ps_quote("C:\\a'b"), "'C:\\a''b'");
-        assert_eq!(ps_quote("x\u{2019}y"), "'x''y'");
+        assert_eq!(ps_quote("x\u{2019}y"), "'x\u{2019}\u{2019}y'");
     }
 
     #[cfg(unix)]

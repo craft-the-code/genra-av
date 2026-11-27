@@ -70,7 +70,13 @@ pub enum Action {
     Unhide { path: PathBuf },
     /// Stop the threat while it runs (`path` is the threat it runs), if process `pid` is still the
     /// one seen when the plan was made. Not undoable, and nothing to undo: nothing on disk changes.
-    StopProcess { pid: u32, started: String, path: PathBuf, program: String },
+    /// `image`: the process's own program is the threat (Windows keeps a running program's file
+    /// in place, so it cannot go to quarantine until the process stops).
+    StopProcess { pid: u32, started: String, path: PathBuf, program: String, image: bool },
+    /// Switch off a startup entry that runs a threat, inside a threat's repair: like
+    /// [`Action::DisableStartupItem`], but an entry already gone or one Windows will not let go
+    /// never fails the repair (that would put the threat back).
+    DisableThreatStartup { id: String },
     /// Switch off a scheduled task that runs a threat (a task this user made).
     DisableScheduledTask { name: String },
     /// Lift a lock malware put on a Windows tool (Task Manager, Registry Editor, Folder Options):
@@ -286,7 +292,13 @@ fn machine_steps(threats: &[PathBuf], report: &Report, scope: &Scope) -> Machine
     for (p, path) in traces::processes_of(&processes, threats) {
         let program = p.exe.as_deref().map(traces::base_name).unwrap_or_else(|| name_of(&path));
         out.before.push(Step {
-            action: Action::StopProcess { pid: p.pid, started: p.started.clone(), path: path.clone(), program: program.clone() },
+            action: Action::StopProcess {
+                pid: p.pid,
+                started: p.started.clone(),
+                path: path.clone(),
+                program: program.clone(),
+                image: p.exe.as_deref().is_some_and(|e| e.to_string_lossy().replace('/', "\\").eq_ignore_ascii_case(&path.to_string_lossy().replace('/', "\\"))),
+            },
             title_vi: format!("Dừng “{}” đang chạy", name_of(&path)),
             title_en: format!("Stop “{}”, which is running", name_of(&path)),
             needs: None,
@@ -296,7 +308,7 @@ fn machine_steps(threats: &[PathBuf], report: &Report, scope: &Scope) -> Machine
     for e in startup::pointing_at(&persistence, threats) {
         let action = match (&e.kind, e.scope) {
             (startup::PersistKind::Task { name }, _) => Action::DisableScheduledTask { name: name.clone() },
-            (startup::PersistKind::Entry, startup::ItemScope::User) => Action::DisableStartupItem { id: e.id.clone() },
+            (startup::PersistKind::Entry, startup::ItemScope::User) => Action::DisableThreatStartup { id: e.id.clone() },
             (startup::PersistKind::Entry, startup::ItemScope::System) => {
                 out.needs_admin += 1;
                 continue;
@@ -375,7 +387,7 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
     steps.splice(0..0, std::mem::take(&mut machine.before));
     let stopped = steps.iter().filter(|s| matches!(s.action, Action::StopProcess { .. })).count();
     steps.extend(usb);
-    let startup_off = machine.after.iter().filter(|s| matches!(s.action, Action::DisableStartupItem { .. } | Action::DisableScheduledTask { .. })).count();
+    let startup_off = machine.after.iter().filter(|s| matches!(s.action, Action::DisableThreatStartup { .. } | Action::DisableScheduledTask { .. })).count();
     let unlocked = machine.after.len() - startup_off;
     steps.extend(machine.after);
     let mut xlstart = usize::from(threat_in_xlstart);
@@ -561,10 +573,12 @@ pub fn run_in(plan: &Plan, journal: &mut Journal, excel: impl Fn() -> ExcelStatu
 
     let mut did = Vec::new();
     let mut failure: Option<(usize, String)> = None;
+    // Threats whose own program could not be stopped: Windows keeps their file in place.
+    let mut still_running: HashSet<PathBuf> = HashSet::new();
     for (i, step) in plan.steps.iter().enumerate() {
         let p = |state| StepProgress { index: i, total, title_vi: step.title_vi.clone(), title_en: step.title_en.clone(), state };
         progress(p(StepState::Started));
-        match do_step(&step.action, &plan.group_id, journal) {
+        match do_step(&step.action, &plan.group_id, journal, &mut still_running) {
             Ok((state, d, vi, en)) => {
                 progress(p(state));
                 report.steps.push(StepResult { index: i, title_vi: step.title_vi.clone(), title_en: step.title_en.clone(), state, detail_vi: vi, detail_en: en, error: None });
@@ -673,7 +687,7 @@ fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>> {
 
 type StepDone = (StepState, Did, String, String);
 
-fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
+fn do_step(action: &Action, group: &str, j: &mut Journal, still_running: &mut HashSet<PathBuf>) -> Result<StepDone> {
     match action {
         Action::ReplaceWithClean { path } => {
             let bytes = read_regular(path, clean::MAX_INPUT as u64)?;
@@ -699,6 +713,12 @@ fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
             };
             Ok((StepState::Done, Did::Cleaned(CleanedFile { original_path: path.clone(), clean_path: dest, removed: cleaned.removed, kept: cleaned.kept }), vi, en))
         }
+        Action::QuarantineFile { path, .. } if still_running.contains(path) => Ok((
+            StepState::NotAllowed,
+            Did::Other,
+            "Chương trình này vẫn đang chạy nên chưa cất được. Nó sẽ không tự chạy lại; khởi động lại máy rồi quét lại để cất nó.".into(),
+            "This program is still running, so it cannot be moved yet. It will not start again on its own; restart, then scan again to move it.".into(),
+        )),
         Action::QuarantineFile { path, expected_sha256 } => {
             let name = name_of(path);
             j.quarantine_file(group, path, expected_sha256, "Dọn sạch giúp tôi", &format!("Cất “{name}” vào khu cách ly"), &format!("Move “{name}” to quarantine"))?;
@@ -723,6 +743,15 @@ fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
             let (vi, en) = startup::disable(id, group, j)?;
             Ok((StepState::Done, Did::Other, vi, en))
         }
+        Action::DisableThreatStartup { id } => {
+            if !startup::exists(id) {
+                return Ok((StepState::Skipped, Did::Other, "Mục này đã không còn.".into(), "This item is already gone.".into()));
+            }
+            Ok(match startup::disable(id, group, j) {
+                Ok((vi, en)) => (StepState::Done, Did::Other, vi, en),
+                Err(_) => (StepState::NotAllowed, Did::Other, "Genra chưa tắt được mục này; Genra không đổi nó.".into(), "Genra could not switch this item off; it is left as it was.".into()),
+            })
+        }
         Action::Unhide { path } => {
             let mask = crate::attrs::HIDDEN | crate::attrs::SYSTEM;
             let now = crate::attrs::get(path)?;
@@ -733,20 +762,30 @@ fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
             j.set_attributes(group, path, now & !mask, &format!("Hiện lại “{name}”"), &format!("Show “{name}” again"))?;
             Ok((StepState::Done, Did::Other, "Đã hiện lại, dữ liệu vẫn nguyên.".into(), "Visible again; the data is untouched.".into()))
         }
-        // The next three never fail the repair: what they could not do is said in the step, and
-        // the threat itself still goes to quarantine.
-        Action::StopProcess { pid, started, path, .. } => Ok(match traces::stop(*pid, started, path) {
+        // The machine steps below never fail the repair: what they could not do is said in the
+        // step (NotAllowed), and the done screen asks for a restart.
+        Action::StopProcess { pid, started, path, image, .. } => Ok(match traces::stop(*pid, started, path) {
             Ok(traces::Stopped::Stopped) => (StepState::Done, Did::Other, "Đã dừng.".into(), "Stopped.".into()),
             Ok(traces::Stopped::Gone) => (StepState::Skipped, Did::Other, "Đã tự dừng trước đó.".into(), "It had already stopped.".into()),
-            Ok(traces::Stopped::Refused) | Err(_) => (
-                StepState::NotAllowed,
-                Did::Other,
-                "Windows không cho dừng lúc này. Sau khi khởi động lại máy, nó sẽ không chạy nữa.".into(),
-                "Windows would not stop it now. After a restart it will not run again.".into(),
-            ),
+            r => {
+                if *image {
+                    still_running.insert(path.clone());
+                }
+                let (vi, en) = if matches!(r, Ok(traces::Stopped::Refused)) {
+                    ("Windows không cho dừng lúc này.", "Windows would not stop it now.")
+                } else {
+                    ("Genra chưa dừng được nó lúc này.", "Genra could not stop it now.")
+                };
+                (StepState::NotAllowed, Did::Other, format!("{vi} Sau khi khởi động lại máy, nó sẽ không tự chạy nữa."), format!("{en} After a restart it will not start on its own."))
+            }
         }),
         Action::DisableScheduledTask { name } => {
             let short = name.rsplit('\\').next().unwrap_or(name);
+            match traces::task_enabled(name) {
+                Ok(None) => return Ok((StepState::Skipped, Did::Other, "Tác vụ này đã không còn.".into(), "This task is already gone.".into())),
+                Ok(Some(false)) => return Ok((StepState::Skipped, Did::Other, "Tác vụ này đã tắt sẵn.".into(), "This task is already off.".into())),
+                _ => {}
+            }
             match j.disable_task(group, name, &format!("Tắt tác vụ hẹn giờ “{short}”"), &format!("Switch off the scheduled task “{short}”")) {
                 Ok(()) => Ok((StepState::Done, Did::Other, "Sẽ không tự chạy nữa.".into(), "It will not run on its own any more.".into())),
                 Err(_) => Ok((
@@ -762,7 +801,7 @@ fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
             if !matches!(reg::get(key, name), Ok(Some(reg::RegValue::Dword(n))) if n != 0) {
                 return Ok((StepState::Skipped, Did::Other, "Đã mở sẵn.".into(), "Already unlocked.".into()));
             }
-            match j.move_registry_value(group, key, name, &traces::lock_backup(key), &format!("Mở lại {vi}"), &format!("Unlock {en}")) {
+            match j.move_registry_value(group, key, name, &traces::lock_backup(key, group), &format!("Mở lại {vi}"), &format!("Unlock {en}")) {
                 Ok(()) => Ok((StepState::Done, Did::Other, format!("Bạn mở lại được {vi}."), format!("You can open {en} again."))),
                 Err(_) => Ok((StepState::NotAllowed, Did::Other, "Không mở được khoá này; Genra không đổi.".into(), "This lock could not be lifted; Genra leaves it.".into())),
             }

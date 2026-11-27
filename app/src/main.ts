@@ -821,8 +821,8 @@ function doneResult(a: Extract<Act, { s: "repaired" }>): string {
     ${icon("ok")}
     <div class="result-body">
       <div class="result-head">
-        <h2 id="res-title">${esc(t(machine ? "done.title.machine" : "done.title"))}</h2>
-        <p>${esc(t(machine ? "done.text.machine" : "done.text"))}</p>
+        <h2 id="res-title">${esc(t(m.left > 0 ? "done.title.partial" : machine ? "done.title.machine" : "done.title"))}</h2>
+        <p>${esc(t(m.left > 0 ? "done.text.partial" : machine ? "done.text.machine" : "done.text"))}</p>
       </div>
       <ul class="done-steps" data-fid="done-steps">${items.join("")}</ul>
       <div class="card inset tell">${line("message-square")}<span>${esc(t("done.tell"))}</span></div>

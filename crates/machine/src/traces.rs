@@ -26,6 +26,14 @@ pub struct Running {
     pub command: String,
 }
 
+/// Programs that run a script or command they are handed: when one of them names the threat on
+/// its command line, it is the threat running. Any other program that names it (a browser, a PDF
+/// reader, an editor) only has it open and is never stopped.
+const SCRIPT_HOSTS: &[&str] = &[
+    "wscript.exe", "cscript.exe", "mshta.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "rundll32.exe", "regsvr32.exe", "conhost.exe", "msiexec.exe",
+    "java.exe", "javaw.exe", "python.exe", "pythonw.exe", "node.exe", "autoit3.exe", "hh.exe",
+];
+
 /// Programs never stopped, whatever their command line says: the shell, Office (it holds the
 /// user's documents; Excel is asked to close instead), and Windows' own core processes.
 const NEVER_STOP: &[&str] = &[
@@ -47,12 +55,16 @@ pub fn mentions(command: &str, path: &Path) -> bool {
     }
     let c = norm(command);
     let edge = |ch: Option<char>| ch.is_none_or(|ch| matches!(ch, '"' | '\'' | ' ' | '\t' | '=' | ',' | ';' | '(' | ')'));
+    // Unquoted `D:\\New` must not match `D:\\New Folder\\app.exe`: a space ends a path only
+    // when the path has an extension.
+    let has_ext = p.rsplit('\\').next().is_some_and(|n| n.contains('.'));
+    let after_edge = |ch: Option<char>| edge(ch) && (has_ext || !matches!(ch, Some(' ' | '\t')));
     let mut from = 0;
     while let Some(i) = c[from..].find(&p) {
         let at = from + i;
         let before = c[..at].chars().next_back();
         let after = c[at + p.len()..].chars().next();
-        if edge(before) && edge(after) {
+        if edge(before) && after_edge(after) {
             return true;
         }
         from = at + 1;
@@ -69,6 +81,12 @@ pub fn base_name(p: &Path) -> String {
     s.rsplit(['\\', '/']).next().unwrap_or(&s).to_string()
 }
 
+/// Inside the Windows folder (`%SystemRoot%`, or `C:\\Windows` when it is not set).
+fn in_windows(p: &Path) -> bool {
+    let root = norm(&std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()));
+    norm(&p.to_string_lossy()).starts_with(&format!("{}\\", root.trim_end_matches('\\')))
+}
+
 fn same_path(a: &Path, b: &Path) -> bool {
     norm(&a.to_string_lossy()) == norm(&b.to_string_lossy())
 }
@@ -83,11 +101,12 @@ pub fn processes_of<'a>(list: &'a [Running], targets: &[PathBuf]) -> Vec<(&'a Ru
         if r.pid == me || r.pid <= 4 {
             continue;
         }
-        let exe_name = r.exe.as_deref().map(|e| base_name(e).to_lowercase());
-        if exe_name.as_deref().is_some_and(|n| NEVER_STOP.contains(&n)) {
-            continue;
-        }
-        let hit = targets.iter().find(|t| r.exe.as_deref().is_some_and(|e| same_path(e, t)) || mentions(&r.command, t));
+        let exe_name = r.exe.as_deref().map(|e| base_name(e).to_lowercase()).unwrap_or_default();
+        // Its own program is the threat: stopped whatever it is called (malware named
+        // svchost.exe in AppData), unless it is Windows' own copy.
+        let image = targets.iter().find(|t| r.exe.as_deref().is_some_and(|e| same_path(e, t)) && !in_windows(t));
+        let host = SCRIPT_HOSTS.contains(&exe_name.as_str()) && !NEVER_STOP.contains(&exe_name.as_str());
+        let hit = image.or_else(|| if host { targets.iter().find(|t| mentions(&r.command, t)) } else { None });
         if let Some(t) = hit {
             out.push((r, t.clone()));
         }
@@ -159,8 +178,8 @@ pub fn stop(pid: u32, started: &str, path: &Path) -> Result<Stopped> {
              if (-not $p) {{ 'gone'; exit }}; \
              $t = $(if ($p.CreationDate) {{ $p.CreationDate.ToUniversalTime().ToString('o') }} else {{ '' }}); \
              if ($t -ne {s}) {{ 'gone'; exit }}; \
-             $e = [string]$p.ExecutablePath; $c = ([string]$p.CommandLine).ToLower(); \
-             if (-not ($e -ieq {p} -or $c.Contains({p}.ToLower()))) {{ 'gone'; exit }}; \
+             $e = [string]$p.ExecutablePath; $c = ([string]$p.CommandLine).Replace('/', '\\').ToLower(); \
+             if (-not ($e -ieq {p} -or $c.Contains({p}.Replace('/', '\\').ToLower()))) {{ 'gone'; exit }}; \
              try {{ Stop-Process -Id {pid} -Force -ErrorAction Stop }} catch {{ 'refused'; exit }}; \
              $n = 0; while ((Get-Process -Id {pid} -ErrorAction SilentlyContinue) -and $n -lt 30) {{ Start-Sleep -Milliseconds 100; $n++ }}; \
              if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ 'refused' }} else {{ 'stopped' }}"
@@ -195,7 +214,7 @@ pub fn task_enabled(full: &str) -> Result<Option<bool>> {
     {
         let (path, name) = split_task(full);
         let script = format!(
-            "$t = Get-ScheduledTask -TaskPath {} -TaskName {} -ErrorAction SilentlyContinue; if (-not $t) {{ 'gone' }} elseif ($t.State.ToString() -eq 'Disabled') {{ 'off' }} else {{ 'on' }}",
+            "$t = @(Get-ScheduledTask -TaskPath {} -ErrorAction SilentlyContinue | Where-Object {{ $_.TaskName -ceq {} }}); if ($t.Count -ne 1) {{ 'gone' }} elseif ($t[0].State.ToString() -eq 'Disabled') {{ 'off' }} else {{ 'on' }}",
             proc::ps_quote(&path),
             proc::ps_quote(&name)
         );
@@ -220,7 +239,13 @@ pub fn set_task_enabled(full: &str, on: bool) -> Result<()> {
     {
         let (path, name) = split_task(full);
         let verb = if on { "Enable-ScheduledTask" } else { "Disable-ScheduledTask" };
-        let script = format!("try {{ {verb} -TaskPath {} -TaskName {} -ErrorAction Stop | Out-Null; 'ok' }} catch {{ 'error: ' + $_.Exception.Message }}", proc::ps_quote(&path), proc::ps_quote(&name));
+        // Matched exactly (the cmdlets read -TaskName as a wildcard; `[` is legal in a name), one
+        // task only, and that object is what is switched.
+        let script = format!(
+            "try {{ $t = @(Get-ScheduledTask -TaskPath {} -ErrorAction Stop | Where-Object {{ $_.TaskName -ceq {} }}); if ($t.Count -ne 1) {{ 'error: not exactly one task' }} else {{ $t[0] | {verb} -ErrorAction Stop | Out-Null; 'ok' }} }} catch {{ 'error: ' + $_.Exception.Message }}",
+            proc::ps_quote(&path),
+            proc::ps_quote(&name)
+        );
         let o = proc::powershell(&script, Duration::from_secs(20))?;
         if o.stdout.trim() == "ok" {
             Ok(())
@@ -244,9 +269,10 @@ pub const LOCKS: &[(&str, &str, &str, &str)] = &[
     ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoFolderOptions", "Tuỳ chọn thư mục (hiện tệp ẩn)", "Folder Options (show hidden files)"),
 ];
 
-/// Where a lock goes when it is lifted (moved, not deleted, so undo puts it back).
-pub fn lock_backup(key: &str) -> String {
-    format!("HKCU\\Software\\Genra AV\\LiftedLocks\\{}", key.rsplit('\\').next().unwrap_or("System"))
+/// Where a lock goes when it is lifted (moved, not deleted, so undo puts it back): one key per
+/// repair, so a lock set again after a reinfection can be lifted again.
+pub fn lock_backup(key: &str, group: &str) -> String {
+    format!("HKCU\\Software\\Genra AV\\LiftedLocks\\{group}\\{}", key.rsplit('\\').next().unwrap_or("System"))
 }
 
 /// The machine is managed by an organisation (joined to a domain): its IT may set these on purpose.
@@ -283,6 +309,9 @@ mod tests {
         assert!(!mentions("wscript.exe C:\\Users\\a\\AppData\\Roaming\\x.json", p));
         assert!(!mentions("wscript.exe D:\\b\\C:\\Users\\a\\AppData\\Roaming\\x.js", p));
         assert!(!mentions("anything", Path::new("C:")));
+        // A path without an extension ends at a quote, not at a space.
+        assert!(!mentions("D:\\New Folder\\app.exe --x", Path::new("D:\\New")));
+        assert!(mentions("cmd /c \"D:\\New\" x", Path::new("D:\\New")));
     }
 
     fn r(pid: u32, exe: &str, command: &str) -> Running {
@@ -301,10 +330,17 @@ mod tests {
             r(104, "C:\\Windows\\notepad.exe", "notepad.exe C:\\Users\\a\\notes.txt"),
             r(105, "", "update.exe"),
             r(std::process::id(), "C:\\x\\genra.exe", "E:\\_\\x.js"),
+            // A browser or PDF reader that only has the threat open is never stopped.
+            r(106, "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "msedge.exe --single-argument E:\\_\\x.js"),
+            // Malware named like a Windows program, outside Windows: its own program is the threat.
+            r(107, "C:\\Users\\a\\AppData\\Roaming\\svc\\svchost.exe", "svchost.exe"),
         ];
-        let hits = processes_of(&list, &[threat.clone(), script.clone()]);
+        let fake = PathBuf::from("C:\\Users\\a\\AppData\\Roaming\\svc\\svchost.exe");
+        let hits = processes_of(&list, &[threat.clone(), script.clone(), fake]);
         let pids: Vec<u32> = hits.iter().map(|(p, _)| p.pid).collect();
-        assert_eq!(pids, [100, 101]);
+        assert_eq!(pids, [100, 101, 107]);
+        let real = PathBuf::from("C:\\Windows\\System32\\svchost.exe");
+        assert!(processes_of(&[r(108, "C:\\Windows\\System32\\svchost.exe", "svchost.exe -k x")], &[real]).is_empty(), "Windows' own copy, never");
         assert_eq!(hits[1].1, script);
     }
 
@@ -329,7 +365,7 @@ mod tests {
     fn locks() {
         assert!(managed(|k| (k == "USERDNSDOMAIN").then(|| "CORP.EXAMPLE".to_string())));
         assert!(!managed(|_| None));
-        assert_eq!(lock_backup(LOCKS[0].0), "HKCU\\Software\\Genra AV\\LiftedLocks\\System");
+        assert_eq!(lock_backup(LOCKS[0].0, "ab12"), "HKCU\\Software\\Genra AV\\LiftedLocks\\ab12\\System");
         assert_eq!(lock_label(&LOCKS[2].0.to_lowercase(), "nofolderoptions").map(|l| l.1), Some("Folder Options (show hidden files)"));
         assert!(lock_label("HKCU\\Software\\X", "DisableTaskMgr").is_none());
     }

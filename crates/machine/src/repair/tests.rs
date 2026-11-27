@@ -502,9 +502,9 @@ fn what_the_threat_left_on_the_machine_is_planned_around_its_quarantine() {
     };
     let plan = plan_for_threat_in(&threat, &report, &s);
     let kinds: Vec<String> = plan.steps.iter().map(|st| serde_json::to_value(&st.action).unwrap()["type"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kinds, ["stop_process", "quarantine_file", "disable_startup_item", "disable_scheduled_task", "lift_lock"], "stop first so the file can move; {kinds:?}");
-    assert_eq!(plan.steps[0].action, Action::StopProcess { pid: 4242, started: "t0".into(), path: threat.clone(), program: "wscript.exe".into() });
-    assert_eq!(plan.steps[2].action, Action::DisableStartupItem { id: "run:HKCU|svc".into() });
+    assert_eq!(kinds, ["stop_process", "quarantine_file", "disable_threat_startup", "disable_scheduled_task", "lift_lock"], "stop first so the file can move; {kinds:?}");
+    assert_eq!(plan.steps[0].action, Action::StopProcess { pid: 4242, started: "t0".into(), path: threat.clone(), program: "wscript.exe".into(), image: false });
+    assert_eq!(plan.steps[2].action, Action::DisableThreatStartup { id: "run:HKCU|svc".into() });
     assert!(plan.summary_vi.contains("dừng 1 chương trình") && plan.summary_vi.contains("tắt 2 mục tự chạy") && plan.summary_vi.contains("1 mục tự chạy cần quyền quản trị"), "{}", plan.summary_vi);
 
     // A suspicious (not malware) threat: its own traces, but no machine-wide locks.
@@ -517,5 +517,31 @@ fn what_the_threat_left_on_the_machine_is_planned_around_its_quarantine() {
     let doc = root.join("bao-cao.xlsm");
     let plan = plan_for_threat_in(&doc, &report, &s);
     assert!(plan.steps.iter().all(|st| matches!(st.action, Action::ReplaceWithClean { .. })), "{:?}", plan.steps);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_running_threat_windows_will_not_stop_is_left_for_after_a_restart_not_rolled_back() {
+    let root = tmp("still-running");
+    let threat = root.join("svc.exe");
+    std::fs::write(&threat, b"MZ worm").unwrap();
+    let sha = sha256_hex(b"MZ worm");
+    let plan = Plan {
+        group_id: Journal::new_group_id().unwrap(),
+        steps: vec![
+            // Off Windows, stopping always fails: it stands for a process Windows will not stop.
+            Step { action: Action::StopProcess { pid: 999_999, started: "t".into(), path: threat.clone(), program: "svc.exe".into(), image: true }, title_vi: "a".into(), title_en: "a".into(), needs: None },
+            Step { action: Action::QuarantineFile { path: threat.clone(), expected_sha256: sha }, title_vi: "b".into(), title_en: "b".into(), needs: None },
+            Step { action: Action::DisableThreatStartup { id: "run:HKCU\\x|gone".into() }, title_vi: "c".into(), title_en: "c".into(), needs: None },
+        ],
+        summary_vi: String::new(),
+        summary_en: String::new(),
+    };
+    let mut j = Journal::open(root.join("data")).unwrap();
+    let r = run_in(&plan, &mut j, ExcelStatus::default, |_| {});
+    assert_eq!(r.outcome, Outcome::Done, "{:?}", r.steps);
+    let states: Vec<StepState> = r.steps.iter().map(|s| s.state).collect();
+    assert_eq!(states, [StepState::NotAllowed, StepState::NotAllowed, StepState::Skipped]);
+    assert!(threat.exists(), "left in place until the restart, nothing rolled back");
     let _ = std::fs::remove_dir_all(&root);
 }

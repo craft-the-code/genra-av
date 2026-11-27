@@ -342,7 +342,9 @@ impl Journal {
             None => bail!("task {name} no longer exists"),
         }
         let id = self.begin(group_id, Change::DisableTask { name: name.into() }, title_vi, title_en)?;
-        let r = crate::traces::set_task_enabled(name, false);
+        // A helper that timed out after the task was switched off still switched it off: the
+        // entry must say Done, or undo would never switch it back on.
+        let r = crate::traces::set_task_enabled(name, false).or_else(|e| if matches!(crate::traces::task_enabled(name), Ok(Some(false))) { Ok(()) } else { Err(e) });
         self.end(group_id, &id, r, |_| None)
     }
 
@@ -429,7 +431,8 @@ impl Journal {
                 Some(false) => Ok(true),
                 // Never switched off, or switched on again since (by the user): nothing to undo.
                 Some(true) => Ok(false),
-                None => bail!("the task {name} no longer exists"),
+                // Deleted since (by the user or another tool): nothing left to switch on.
+                None => Ok(false),
             },
             Change::MoveRegistryValue { key, name, value, backup_key } => {
                 let (here, backup) = (reg::get(key, name)?, reg::get(backup_key, name)?);

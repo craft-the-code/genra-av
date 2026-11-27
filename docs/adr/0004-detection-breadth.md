@@ -107,7 +107,7 @@ what tells Genra what that family leaves behind.
 | Copy in Excel's startup folder | Remove from XLSTART, macro blocking back on | done |
 | USB: real folders hidden, fake shortcuts in their place | Quarantine the fake shortcuts and the worm's files, unhide the real folders and files | done (step 2) |
 | Starts with Windows | Switch off Run/RunOnce values, Startup-folder items and scheduled tasks that run or name the quarantined file | done (2b): this user's entries; machine-wide ones need admin rights and are named in the plan instead |
-| Running process | Stop the threat's process (its program, or a script host whose command line names it) before quarantining it; if Windows refuses, its startup entries are off, so a restart finishes it | done (2b) |
+| Running process | Stop the threat's process before quarantining it: its own program, or a script host (wscript, cmd, PowerShell, mshta…) whose command line names it. A browser or reader that only has the file open is never stopped. If Windows refuses, the startup entries are still switched off and the file stays until a restart and a new scan | done (2b) |
 | Settings changed | Lift the locks malware puts on Task Manager, Registry Editor and Folder Options (malware-level threats only, never on a domain-joined machine); Office macro policy | done (2b) |
 | Defender exclusions the malware added | Reading or removing them needs admin rights, which Genra never asks for | open: needs a decision on an elevated helper |
 
@@ -116,8 +116,13 @@ traced to the threat, scan again at the end. Traced means: a process whose progr
 whose command line names its path; a startup entry that runs it or names it. The Windows tool locks
 are the one exception (malware sets them for the whole account, not per file), hence the two limits
 above. Stopping a process is the one step with nothing to undo: nothing on disk changes. Steps
-Windows does not allow (admin rights, a process that resists) do not fail the repair: the threat
-still goes to quarantine, and the done screen asks for a restart.
+Windows does not allow (admin rights, a process that resists) do not fail the repair: the rest is
+done, and the done screen asks for a restart and one more scan. A program that is still running
+cannot be moved on Windows, so it is the one threat left in place until then.
+
+Known gaps (2b): task commands are read from `schtasks` as UTF-8 although it writes the console code
+page, so a task under a profile path with Vietnamese letters may be missed; "managed machine" is
+detected by a domain only (Entra/Intune-joined PCs are not recognised yet).
 
 ### 5. Measurement gates every layer
 

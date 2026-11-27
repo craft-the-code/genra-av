@@ -292,7 +292,7 @@
   "update.dialog.install": "Cập nhật ngay",
   "update.dialog.dismiss": "Đóng, không nhắc lại bản này",
   "result.plan.traces": "Nếu nó đang chạy hoặc tự chạy cùng máy: dừng nó và tắt các mục đó",
-  "done.stopped": "Dừng chương trình độc đang chạy",
+  "done.stopped": "Dừng chương trình đó đang chạy",
   "done.stopped.detail": "{n} chương trình đã dừng",
   "done.startup": "Tắt mục tự chạy cùng máy",
   "done.startup.detail": "{n} mục sẽ không tự chạy khi mở máy nữa",
@@ -301,5 +301,7 @@
   "done.shown": "Hiện lại thư mục, tệp bị giấu",
   "done.shown.detail": "{n} mục đã hiện lại, dữ liệu nguyên vẹn",
   "done.left": "Cần khởi động lại máy",
-  "done.left.detail": "Windows chưa cho Genra làm {n} việc. Hãy khởi động lại máy rồi quét lại một lần."
+  "done.left.detail": "Windows chưa cho Genra làm {n} việc. Hãy khởi động lại máy rồi quét lại một lần.",
+  "done.title.partial": "Đã dọn phần lớn, cần khởi động lại máy",
+  "done.text.partial": "Windows chưa cho Genra làm hết. Khởi động lại máy rồi quét lại một lần để xong."
 }

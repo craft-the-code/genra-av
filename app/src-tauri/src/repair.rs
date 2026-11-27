@@ -87,7 +87,7 @@ pub fn precheck(rules: &Loaded, path: &Path) -> std::result::Result<Report, Fail
 /// Drops "clean this other file" steps the cleaner would refuse (an encrypted workbook, old
 /// Excel 4.0 macros): one of them failing would roll back the whole repair. They stay where they
 /// are and the next quick scan lists them with "Cách ly tệp này". The detected file itself is
-/// checked by [`precheck`] before planning, so step 0 is kept.
+/// checked by [`precheck`] before planning, so the first step is always kept (for a threat that goes to quarantine there is no `ReplaceWithClean` to drop).
 pub fn keep_cleanable(plan: &mut Plan) {
     let mut first = true;
     plan.steps.retain(|s| {
@@ -160,9 +160,14 @@ fn machine_done(plan: &Plan, report: &RunReport) -> MachineDone {
         let done = r.state == StepState::Done;
         let slot = match &s.action {
             Action::StopProcess { .. } => &mut m.stopped,
-            Action::DisableStartupItem { .. } | Action::DisableScheduledTask { .. } => &mut m.startup,
+            Action::DisableStartupItem { .. } | Action::DisableThreatStartup { .. } | Action::DisableScheduledTask { .. } => &mut m.startup,
             Action::LiftLock { .. } => &mut m.unlocked,
             Action::Unhide { .. } => &mut m.shown,
+            // A threat still running is left for after the restart: counted in `left` below.
+            Action::QuarantineFile { .. } if r.state == StepState::NotAllowed => {
+                m.left += 1;
+                continue;
+            }
             _ => continue,
         };
         if done {
@@ -328,9 +333,9 @@ mod tests {
     #[test]
     fn the_view_counts_what_was_done_on_the_machine() {
         let p = plan(vec![
-            Action::StopProcess { pid: 1, started: "t".into(), path: "/x.js".into(), program: "wscript.exe".into() },
+            Action::StopProcess { pid: 1, started: "t".into(), path: "/x.js".into(), program: "wscript.exe".into(), image: false },
             Action::QuarantineFile { path: "/x.js".into(), expected_sha256: "00".into() },
-            Action::DisableStartupItem { id: "run:x".into() },
+            Action::DisableThreatStartup { id: "run:x".into() },
             Action::DisableScheduledTask { name: "\\x".into() },
             Action::LiftLock { key: "k".into(), name: "n".into() },
             Action::Unhide { path: "/u".into() },

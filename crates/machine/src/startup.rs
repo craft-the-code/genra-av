@@ -186,14 +186,16 @@ fn judge(r: &Raw, sig: Option<&Sig>, pack: Option<&Pack>, rep: Option<&Reputatio
 
 /// Switches a startup item off through the journal. Returns what to tell the user.
 pub(crate) fn disable(id: &str, group: &str, j: &mut Journal) -> Result<(String, String)> {
-    let r = gather().into_iter().find(|r| r.id == id).with_context(|| format!("startup item {id} not found (already gone?)"))?;
+    let r = find(id).with_context(|| format!("startup item {id} not found (already gone?)"))?;
     if r.scope == ItemScope::System {
         bail!("cần quyền quản trị: {} is set for the whole computer; Genra does not change it", r.name);
     }
     match &r.handle {
         Handle::RegValue { key, name } => {
             let sub = key.rsplit('\\').next().unwrap_or("Run");
-            let backup = format!("HKCU\\Software\\Genra AV\\DisabledStartup\\{sub}");
+            // One backup key per repair: the same value switched off again after a reinfection
+            // never collides with the earlier backup.
+            let backup = format!("HKCU\\Software\\Genra AV\\DisabledStartup\\{group}\\{sub}");
             j.move_registry_value(group, key, name, &backup, &format!("Tắt “{}” khi khởi động máy", r.name), &format!("Stop “{}” starting with the computer", r.name))?;
         }
         Handle::File(path) => {
@@ -272,10 +274,14 @@ pub fn persistence() -> Vec<Persist> {
 /// entry that *is* one of the targets (a script dropped straight into the Startup folder) is left
 /// out: quarantining the target already removes it.
 pub fn pointing_at<'a>(list: &'a [Persist], targets: &[PathBuf]) -> Vec<&'a Persist> {
-    let same = |a: &Path, b: &Path| a.to_string_lossy().replace('/', "\\").eq_ignore_ascii_case(&b.to_string_lossy().replace('/', "\\"));
+    let key = |a: &Path| crate::journal::resolved(a).to_string_lossy().replace('/', "\\").to_lowercase();
+    let same = |a: &Path, b: &Path| key(a) == key(b);
     list.iter()
         .filter(|p| !p.file.as_deref().is_some_and(|f| targets.iter().any(|t| same(f, t))))
-        .filter(|p| targets.iter().any(|t| p.target.as_deref().is_some_and(|x| same(x, t)) || crate::traces::mentions(&p.command, t)))
+        .filter(|p| {
+            let command = expand_env(&p.command, |k| std::env::var(k).ok());
+            targets.iter().any(|t| p.target.as_deref().is_some_and(|x| same(x, t)) || crate::traces::mentions(&command, t))
+        })
         .collect()
 }
 
@@ -589,6 +595,21 @@ fn xlstart_items() -> Vec<Raw> {
     out
 }
 
+/// The item with this id now; scheduled tasks are only read when the id is one.
+fn find(id: &str) -> Option<Raw> {
+    #[cfg(windows)]
+    let mut all = imp::gather_with(id.starts_with("task:"));
+    #[cfg(not(windows))]
+    let mut all = imp::gather();
+    all.extend(xlstart_items());
+    all.into_iter().find(|r| r.id == id)
+}
+
+/// The startup item `id` still exists (it may have gone since the plan was made).
+pub(crate) fn exists(id: &str) -> bool {
+    find(id).is_some()
+}
+
 fn gather() -> Vec<Raw> {
     let mut out = imp::gather();
     out.extend(xlstart_items());
@@ -609,6 +630,11 @@ mod imp {
     }
 
     pub fn gather() -> Vec<Raw> {
+        gather_with(true)
+    }
+
+    /// [`gather`], without the scheduled tasks (one slow `schtasks` call) when `tasks` is false.
+    pub fn gather_with(tasks: bool) -> Vec<Raw> {
         let mut out = Vec::new();
         let run = "Software\\Microsoft\\Windows\\CurrentVersion";
         let keys = [
@@ -659,7 +685,7 @@ mod imp {
                 });
             }
         }
-        let schtasks = std::env::var_os("SystemRoot").map(|r| PathBuf::from(r).join("System32\\schtasks.exe")).filter(|p| p.is_file());
+        let schtasks = std::env::var_os("SystemRoot").map(|r| PathBuf::from(r).join("System32\\schtasks.exe")).filter(|p| tasks && p.is_file());
         if let Some(exe) = schtasks {
             if let Ok(o) = proc::run(&exe.to_string_lossy(), &["/query", "/fo", "csv", "/v"], Duration::from_secs(30)) {
                 for t in parse_schtasks_csv(&o.stdout) {

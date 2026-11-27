@@ -292,7 +292,7 @@
   "update.dialog.install": "Update now",
   "update.dialog.dismiss": "Close, don't remind me about this version",
   "result.plan.traces": "If it is running or starts with the computer: stop it and switch those off",
-  "done.stopped": "Stopped the malware that was running",
+  "done.stopped": "Stopped it while it was running",
   "done.stopped.detail": "{n} program(s) stopped",
   "done.startup": "Switched off what starts with the computer",
   "done.startup.detail": "{n} item(s) will no longer start when you sign in",
@@ -301,5 +301,7 @@
   "done.shown": "Showed hidden folders and files again",
   "done.shown.detail": "{n} item(s) visible again, data untouched",
   "done.left": "Restart the computer",
-  "done.left.detail": "Windows did not let Genra do {n} thing(s). Restart the computer, then scan once more."
+  "done.left.detail": "Windows did not let Genra do {n} thing(s). Restart the computer, then scan once more.",
+  "done.title.partial": "Mostly cleaned; restart the computer",
+  "done.text.partial": "Windows did not let Genra finish everything. Restart, then scan once more to finish."
 }
