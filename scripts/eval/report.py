@@ -37,13 +37,19 @@ def main() -> None:
     ap.add_argument("--json")
     a = ap.parse_args()
 
-    family = {m["sha256"]: m["family"] for m in json.load(open(a.manifest))}
-    by_type = collections.defaultdict(lambda: {"n": 0, "any": 0, "no_hash": 0, "malware": 0})
+    manifest = json.load(open(a.manifest))
+    family = {m["sha256"]: m["family"] for m in manifest}
+    # Denominators come from what was downloaded, not from what got scanned: a sample that failed
+    # to unpack or was too large to read counts as "not scanned", never silently disappears.
+    fetched = collections.Counter(m["type"] for m in manifest)
+    by_type = collections.defaultdict(lambda: {"n": 0, "scanned": 0, "any": 0, "no_hash": 0, "malware": 0})
+    for t, n in fetched.items():
+        by_type[t]["n"] = n
     missed_families = collections.Counter()
     for r in rows(a.malware):
         t = os.path.basename(os.path.dirname(r["path"])) or "?"
         s = by_type[t]
-        s["n"] += 1
+        s["scanned"] += 1
         found = [f for f in r.get("findings", []) if serious(f)]
         if found:
             s["any"] += 1
@@ -64,14 +70,16 @@ def main() -> None:
                 fp.append((r["path"], found))
 
     pct = lambda x, n: f"{100 * x / n:.0f} %" if n else "–"
-    total = {k: sum(s[k] for s in by_type.values()) for k in ("n", "any", "no_hash", "malware")}
+    total = {k: sum(s[k] for s in by_type.values()) for k in ("n", "scanned", "any", "no_hash", "malware")}
     print("## Genra AV detection report\n")
-    print("| File type | Samples | Caught | Caught without hash lists | Rated malware |")
-    print("|---|---:|---:|---:|---:|")
+    print("Percentages are of samples downloaded. Archive types (zip, rar, 7z, iso) read near 0 % without")
+    print("hash lists until archive scanning lands (ADR 0004 step 2); that is expected, not a regression.\n")
+    print("| File type | Samples | Not scanned | Caught | Caught without hash lists | Rated malware |")
+    print("|---|---:|---:|---:|---:|---:|")
     for t in sorted(by_type):
         s = by_type[t]
-        print(f"| {t} | {s['n']} | {pct(s['any'], s['n'])} | {pct(s['no_hash'], s['n'])} | {pct(s['malware'], s['n'])} |")
-    print(f"| **all** | **{total['n']}** | **{pct(total['any'], total['n'])}** | **{pct(total['no_hash'], total['n'])}** | **{pct(total['malware'], total['n'])}** |")
+        print(f"| {t} | {s['n']} | {s['n'] - s['scanned']} | {pct(s['any'], s['n'])} | {pct(s['no_hash'], s['n'])} | {pct(s['malware'], s['n'])} |")
+    print(f"| **all** | **{total['n']}** | **{total['n'] - total['scanned']}** | **{pct(total['any'], total['n'])}** | **{pct(total['no_hash'], total['n'])}** | **{pct(total['malware'], total['n'])}** |")
     print(f"\nClean files scanned: {clean_n}; false positives: **{len(fp)}**.")
     for p, rules in fp[:50]:
         print(f"- `{p}`: {', '.join(rules)}")

@@ -68,17 +68,20 @@ jobs:
               [ -e "$z" ] || continue
               sha=$(basename "$z" .zip)
               # One file per sample, named by its hash so the report can find its family.
-              7z e -y -pinfected -o"$s/$t/tmp" "$z" >/dev/null 2>&1 || continue
-              f=$(find "$s/$t/tmp" -type f | head -n 1)
+              7z e -y -pinfected -o"$s/$t/tmp" "$z" >/dev/null 2>&1 || { rm -rf "$s/$t/tmp"; continue; }
+              f=$(find "$s/$t/tmp" -type f -print -quit)
               [ -n "$f" ] && mv "$f" "$s/$t/$sha"
               rm -rf "$s/$t/tmp"
             done
           done
-          chmod -R a-x "$s"
+          # Files only: folders keep their execute bit so they can still be walked and deleted.
+          find "$s" -type f -exec chmod a-x {} +
+          # The scan's exit code says "something found"; an empty result is the failure to catch.
           ./target/release/genra-av scan --rules pack/pack.json --json "$s" > malware.jsonl || true
           cp "$RUNNER_TEMP/zips/manifest.json" manifest.json
           rm -rf "$s" "$RUNNER_TEMP/zips"
-          wc -l < malware.jsonl
+          echo "scanned: $(wc -l < malware.jsonl)"
+          test -s malware.jsonl || { echo "no scan results: the pack or the scanner failed"; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: malware-results
@@ -106,6 +109,7 @@ jobs:
         run: |
           gh release download rules-latest -p pack.json -p pack.json.sig -D pack
           python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json")).get("hash_sets", [])]' > lists
+          grep -qvE '^[A-Za-z0-9._-]+\.bin$' lists && { echo "odd hash list name"; exit 1; }
           while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
       - name: Clean corpus
         run: |
@@ -124,6 +128,8 @@ jobs:
 
   report:
     needs: [malware, clean]
+    # A failed clean job must not hide the malware numbers (and the other way round is pointless).
+    if: always() && needs.malware.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -135,8 +141,10 @@ jobs:
           merge-multiple: true
       - name: Report
         run: |
+          clean=()
+          for f in results/clean-office.jsonl results/clean-system32.jsonl; do [ -f "$f" ] && clean+=(--clean "$f"); done
           python3 scripts/eval/report.py --malware results/malware.jsonl --manifest results/manifest.json \
-            --clean results/clean-office.jsonl --clean results/clean-system32.jsonl --json report.json | tee -a "$GITHUB_STEP_SUMMARY"
+            "${clean[@]}" --json report.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: detection-report
