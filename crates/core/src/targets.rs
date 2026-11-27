@@ -44,7 +44,9 @@ pub fn skip_dir(path: &Path) -> bool {
 /// their copies in hidden folders and leave shortcuts in sight.
 pub fn skip_dir_in(path: &Path, hidden_ok: bool) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
-    if skip_dir_name(name) || (!hidden_ok && is_hidden(path)) {
+    // On a USB stick worms also hide in the recycle bin folders, so those are walked there.
+    let recycle = matches!(name.to_ascii_lowercase().as_str(), "$recycle.bin" | "recycler" | "recycled");
+    if (skip_dir_name(name) && !(hidden_ok && recycle)) || (!hidden_ok && is_hidden(path)) {
         return true;
     }
     cfg!(target_os = "macos") && home().is_some_and(|h| path == h.join("Library"))

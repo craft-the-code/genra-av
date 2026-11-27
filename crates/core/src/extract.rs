@@ -42,6 +42,9 @@ pub struct Facts {
     /// Excel 4.0 (XLM) macros: macro sheets, and names Excel runs on open/close (Auto_Open…).
     /// Old, but still used by droppers because many scanners only look at VBA.
     pub xlm: Vec<String>,
+    /// A BIFF8 workbook whose sheet list is encrypted, so Excel 4.0 macros cannot be checked.
+    /// Office files protected with a password look the same; reported for information only.
+    pub workbook_encrypted: bool,
     /// Templates a document loads from outside itself when opened (remote template injection):
     /// the target, an http(s), UNC or file address.
     pub remote_templates: Vec<String>,
@@ -56,6 +59,12 @@ pub const ZIP_BUDGET: u64 = 256 * 1024 * 1024;
 pub const MAX_ZIP_ENTRIES: usize = 20_000;
 /// Cap on one XML part ([Content_Types].xml, a .rels part, ...).
 pub(crate) const XML_CAP: u64 = 64 * 1024 * 1024;
+/// Cap on one relationship part or workbook.xml read for the XLM / remote-template checks, and the
+/// total for those reads per package: real ones are a few KB.
+const META_PART_CAP: u64 = 1024 * 1024;
+const META_BUDGET: u64 = 8 * 1024 * 1024;
+/// Most of a Workbook stream read to look for Excel 4.0 macros; kept apart from the shared budget.
+const WORKBOOK_CAP: u64 = 64 * 1024 * 1024;
 /// Containers inside containers (docx → oleObject.bin → Package stream → xlsm ...).
 const MAX_NESTING: usize = 4;
 const CONTENT_TYPES: &str = "[content_types].xml";
@@ -105,9 +114,13 @@ impl Budget {
         let limit = cap.min(self.left);
         ensure!(f.size() <= limit, "{name}: {} bytes is over the {limit}-byte budget", f.size());
         let mut buf = Vec::with_capacity(f.size() as usize);
-        f.take(limit + 1).read_to_end(&mut buf).with_context(|| format!("reading {name}"))?;
+        let read = f.take(limit + 1).read_to_end(&mut buf);
+        // Charged whether or not the read succeeds: a member that lies about its size and fails
+        // part way must still cost what it made us decompress, or a package of many such members
+        // keeps the scanner busy for free.
+        self.left = self.left.saturating_sub(buf.len() as u64);
+        read.with_context(|| format!("reading {name}"))?;
         ensure!(buf.len() as u64 <= limit, "{name}: decompresses past the {limit}-byte budget");
-        self.left -= buf.len() as u64;
         Ok(buf)
     }
 
@@ -196,6 +209,7 @@ pub(crate) fn is_vba_project_type(ct: &str) -> bool {
 
 fn zip_vba(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize) -> Result<()> {
     let mut ar = open_zip(bytes)?;
+    let mut meta = Budget::new(META_BUDGET);
     let parts: Vec<String> = (0..ar.len()).map(|i| opc::part_name(ar.name_for_index(i).unwrap_or_default())).collect();
     let present: HashSet<String> = parts.iter().cloned().collect();
     let types = match content_types_index(&ar) {
@@ -210,24 +224,24 @@ fn zip_vba(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize) -> Re
         if is_macrosheet(part, ct) {
             f.xlm.push(format!("Excel 4.0 macro sheet {part}"));
         }
-        if part.ends_with(".rels") || part == "xl/workbook.xml" {
-            // Small XML parts; one that cannot be read only loses these two checks.
-            if let Ok(xml) = budget.read(&mut ar, i, XML_CAP) {
-                if let Ok(text) = opc::text(&xml) {
+        if opc::rels_source(part).is_some() || part == "xl/workbook.xml" {
+            // Small XML parts, read with their own small budget so they can neither starve the
+            // VBA search of the shared one nor be used to keep the scanner decompressing.
+            if let Ok(xml) = meta.read(&mut ar, i, META_PART_CAP) {
+                if let Some(text) = xml_text(&xml) {
                     if part == "xl/workbook.xml" {
-                        for n in opc::auto_run_names(text).unwrap_or_default() {
+                        for n in opc::auto_run_names(&text).unwrap_or_default() {
                             f.xlm.push(format!("defined name {n} (runs a macro on open/close)"));
                         }
                     } else {
-                        let _ = opc::relationships(text, |r| {
-                            if r.external && is_template_rel(&r.kind_name()) && is_remote(&r.target) {
+                        let _ = opc::relationships(&text, |r| {
+                            if r.external && is_loading_rel(&r.kind_name()) && is_remote(&r.target) {
                                 f.remote_templates.push(r.target.clone());
                             }
                         });
                     }
                 }
             }
-            continue;
         }
         let claimed = part.ends_with("vbaproject.bin") || types.as_ref().and_then(|t| t.type_of(part)).is_some_and(is_vba_project_type);
         let head = budget.head(&mut ar, i)?;
@@ -258,6 +272,22 @@ fn zip_vba(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize) -> Re
     Ok(())
 }
 
+/// An XML part as text: UTF-8, or UTF-16 with a byte-order mark (Office reads both, so an
+/// attacker can pick UTF-16 to slip past a UTF-8-only reader).
+fn xml_text(bytes: &[u8]) -> Option<String> {
+    let utf16 = |b: &[u8], le: bool| {
+        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) }).collect();
+        String::from_utf16(&units).ok()
+    };
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return utf16(rest, true);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return utf16(rest, false);
+    }
+    opc::text(bytes).ok().map(str::to_string)
+}
+
 /// A SpreadsheetML Excel 4.0 macro sheet part, by content type or by its usual folder.
 fn is_macrosheet(part: &str, ct: Option<&str>) -> bool {
     ct.is_some_and(|t| t.to_ascii_lowercase().contains("macrosheet"))
@@ -265,25 +295,49 @@ fn is_macrosheet(part: &str, ct: Option<&str>) -> bool {
         || part.starts_with("xl/intlmacrosheets/")
 }
 
-/// Relationship kinds through which Word loads another document when it opens this one.
-fn is_template_rel(kind: &str) -> bool {
-    matches!(kind, "attachedtemplate" | "frame" | "subdocument")
+/// External relationship kinds through which Office fetches something when the document opens:
+/// a template (remote template injection), a frame or sub-document, or a linked OLE object
+/// (CVE-2017-0199, "Follina" CVE-2022-30190).
+fn is_loading_rel(kind: &str) -> bool {
+    matches!(kind, "attachedtemplate" | "frame" | "subdocument" | "oleobject")
 }
 
-/// An address outside the computer's own disks: web, FTP or a network share. Word records an
-/// ordinary local template as `file:///C:\...` or `C:\...`; those are not remote.
+/// An address outside this computer's own disks: web, FTP, MHTML wrapping a web address
+/// (CVE-2021-40444), or a network share in any spelling (`\\host\share`, `//host/share`,
+/// `file://host/share`, `file:////host/share`). Local paths are not remote: `C:\...`,
+/// `file:///C:/...`, `file://localhost/C:/...`, and the Windows long-path form `\\?\C:\...`.
 pub(crate) fn is_remote(target: &str) -> bool {
-    let t = target.trim().to_ascii_lowercase().replace('\\', "/");
-    if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("ftp://") {
+    let mut t = target.trim().to_ascii_lowercase().replace('\\', "/");
+    while let Some(rest) = t.strip_prefix("mhtml:").or_else(|| t.strip_prefix("ms-word:")) {
+        t = rest.trim_start().to_string();
+    }
+    if ["http://", "https://", "ftp://"].iter().any(|p| t.starts_with(p)) {
         return true;
     }
-    // file://server/share/x (a share) vs file:///c:/x (a local disk).
-    if let Some(rest) = t.strip_prefix("file:") {
-        let rest = rest.trim_start_matches('/');
-        let local_drive = rest.as_bytes().get(1) == Some(&b':') || rest.as_bytes().get(1) == Some(&b'|');
-        return !local_drive && !rest.is_empty() && t.starts_with("file://") && !t.starts_with("file:///");
+    let had_file = t.starts_with("file:");
+    let rest = t.strip_prefix("file:").unwrap_or(&t);
+    let slashes = rest.len() - rest.trim_start_matches('/').len();
+    let rest = rest.trim_start_matches('/');
+    // `//?/c:/x` (long path) and `//?/unc/host/share` (a share).
+    if let Some(after) = rest.strip_prefix("?/").or_else(|| rest.strip_prefix("./")) {
+        return after.starts_with("unc/");
     }
-    t.starts_with("//")
+    let drive = |s: &str| matches!(s.as_bytes(), [_, b':' | b'|', ..]);
+    if drive(rest) {
+        return false;
+    }
+    if had_file {
+        // file:x, file:/x and file:///x name this machine; file://host/x names a host (local
+        // when it is empty or localhost); four or more slashes are a UNC path (file:////host/x).
+        let host = rest.split('/').next().unwrap_or("");
+        return match slashes {
+            0 | 1 | 3 => false,
+            2 => !host.is_empty() && host != "localhost",
+            _ => true,
+        };
+    }
+    // Two leading slashes (from `\\` or `//`) and a host: a network share.
+    slashes >= 2 && !rest.is_empty()
 }
 
 /// True for an OLE2 file whose root holds a VBA project directly (`/VBA/dir`): a bare
@@ -344,10 +398,16 @@ fn ole_vba_inner(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize)
     }
     // Excel 4.0 macros in a BIFF8 workbook (the same check the cleaner refuses on). An encrypted
     // or unusual stream cannot be listed; VBA, if any, is still reported above.
+    // Any Workbook stream, also one embedded in a Word file's ObjectPool. Read on its own budget,
+    // so a large ordinary workbook does not leave too little for the embedded objects below.
     for (p, is_stream, _) in &entries {
-        if *is_stream && p.parent() == Some(Path::new("/")) && name_is(p, "Workbook") {
-            if let Ok(data) = read_stream(&mut comp, p, budget) {
-                f.xlm.extend(crate::clean::biff::xlm_macros(&data).unwrap_or_default());
+        if *is_stream && name_is(p, "Workbook") {
+            let mut own = Budget::new(WORKBOOK_CAP);
+            let Ok(data) = read_stream(&mut comp, p, &mut own) else { continue };
+            match crate::clean::biff::xlm_macros(&data) {
+                Ok(found) => f.xlm.extend(found),
+                Err(e) if format!("{e:#}").contains("encrypted") => f.workbook_encrypted = true,
+                Err(_) => {}
             }
         }
     }
@@ -454,6 +514,23 @@ pub(crate) mod tests {
             w.write_all(data).unwrap();
         }
         w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn oversized_relationship_parts_cannot_starve_the_vba_search() {
+        // 60 relationship parts of 2 MB of spaces each (tiny when deflated) before the project:
+        // 120 MB if read in full. Each is capped at 1 MB on its own 8 MB budget, so the VBA
+        // project after them is still found and the scan stays quick.
+        let big = vec![b' '; 2 * 1024 * 1024];
+        let names: Vec<String> = (0..60).map(|i| format!("word/_rels/p{i}.xml.rels")).collect();
+        let bin = vba_project_bin();
+        let mut parts: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), big.as_slice())).collect();
+        parts.push(("word/vbaProject.bin", &bin));
+        let started = std::time::Instant::now();
+        let f = facts(&zip_of(&parts));
+        assert_eq!(f.vba.len(), 1, "the VBA project after the big parts is still read");
+        assert!(!f.vba_unreadable);
+        assert!(started.elapsed().as_secs() < 20, "took {:?}", started.elapsed());
     }
 
     #[test]

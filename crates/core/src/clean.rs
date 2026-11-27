@@ -1690,11 +1690,49 @@ mod tests {
 
     #[test]
     fn scan_reports_remote_templates_but_not_local_ones() {
-        for remote in ["http://203.0.113.9/t.dotm", "https://x.example/t.dotm", "\\\\203.0.113.9\\share\\t.dotm", "file://server/share/t.dotm"] {
+        for remote in [
+            "http://203.0.113.9/t.dotm",
+            "https://x.example/t.dotm",
+            "\\\\203.0.113.9\\share\\t.dotm",
+            "file://server/share/t.dotm",
+            "file:////server/share/t.dotm",
+            "file:///\\\\server\\share\\t.dotm",
+            "mhtml:http://x.example/t.html!x-usc:http://x.example/t.html",
+            "\\\\?\\UNC\\server\\share\\t.dotm",
+        ] {
             assert_eq!(builtin_rules(&docx_with_template(remote)), ["builtin.remote_template"], "{remote}");
         }
-        for local in ["file:///C:\\Users\\a\\AppData\\Roaming\\Microsoft\\Templates\\Normal.dotm", "C:\\Templates\\Bao cao.dotx", "Normal.dotm"] {
+        for local in [
+            "file:///C:\\Users\\a\\AppData\\Roaming\\Microsoft\\Templates\\Normal.dotm",
+            "C:\\Templates\\Bao cao.dotx",
+            "Normal.dotm",
+            "file://localhost/C:/Templates/t.dotx",
+            "file:/C:/Templates/t.dotx",
+            "\\\\?\\C:\\Templates\\t.dotx",
+        ] {
             assert!(builtin_rules(&docx_with_template(local)).is_empty(), "{local}");
         }
+    }
+
+    #[test]
+    fn scan_reports_remote_ole_objects_and_utf16_relationships() {
+        // A linked OLE object fetched from the web (CVE-2017-0199 / Follina style).
+        let rels = format!(
+            r#"<Relationships xmlns="{NS_RELS}"><Relationship Id="rId9" Type="{REL}/oleObject" Target="http://x.example/a.html!" TargetMode="External"/></Relationships>"#
+        );
+        let doc = zip_of(&[("word/_rels/document.xml.rels", rels.as_bytes()), ("word/document.xml", b"<w:document/>")]);
+        assert_eq!(builtin_rules(&doc), ["builtin.remote_template"]);
+        // The same relationships part saved as UTF-16: Office reads it, so must we.
+        let mut utf16 = vec![0xFF, 0xFE];
+        utf16.extend(rels.encode_utf16().flat_map(u16::to_le_bytes));
+        let doc = zip_of(&[("word/_rels/document.xml.rels", &utf16), ("word/document.xml", b"<w:document/>")]);
+        assert_eq!(builtin_rules(&doc), ["builtin.remote_template"]);
+    }
+
+    #[test]
+    fn an_auto_open_name_alone_is_not_reported() {
+        let wb = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Auto_Open">Sheet1!$A$1</definedName></definedNames></workbook>"#;
+        let x = zip_of(&[("xl/workbook.xml", wb.as_bytes())]);
+        assert!(builtin_rules(&x).is_empty(), "no macro sheet and no VBA: nothing would run");
     }
 }
