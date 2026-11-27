@@ -327,5 +327,8 @@
   "machine.guard.usb.on": "Scanned when plugged in",
   "machine.guard.scanning": "Scanning",
   "settings.guard": "Folder guard",
-  "settings.guard.text": "While Genra is open, every new file in Downloads and Zalo is checked at once, and a USB stick is scanned when plugged in. If nothing is found, Genra stays quiet."
+  "settings.guard.text": "While Genra is open, every new file in Downloads and Zalo is checked at once, and a USB stick is scanned when plugged in. If nothing is found, Genra stays quiet.",
+  "settings.autostart": "Start with the computer",
+  "settings.autostart.text": "Genra starts in the system tray when you sign in, to guard, without opening its window. Closing the window keeps it guarding from the tray.",
+  "settings.autostart.error": "Could not set it: {detail}"
 }

@@ -140,6 +140,8 @@ export interface MachineOverview { health: HealthItem[]; startup: StartupItem[];
 export interface Settings { send_hashes: boolean; shell_menu: boolean; guard: boolean }
 /** "Canh gác": the folders watched now, the drives plugged in, a drive being scanned. */
 export interface GuardStatus { on: boolean; folders: string[]; usb: string[]; scanning: string | null }
+/** "Mở cùng máy": the setting, the login item (null in development builds), an error. */
+export interface Autostart { on: boolean; registered: boolean | null; error: string | null }
 export interface GuardUsb { drive: string; done: boolean; hits: number }
 /** "Kiểm tra bằng Genra AV" in the Explorer menu (Windows only). */
 export interface ShellMenu { supported: boolean; on: boolean; error: string | null }
@@ -177,6 +179,8 @@ export const installUpdate = () => invoke<void>("install_update");
 export const getSettings = () => invoke<Settings>("get_settings");
 export const shellMenu = (lang: string) => invoke<ShellMenu>("shell_menu", { lang });
 export const setShellMenu = (on: boolean, lang: string) => invoke<ShellMenu>("set_shell_menu", { on, lang });
+export const autostart = () => invoke<Autostart>("autostart");
+export const setAutostart = (on: boolean) => invoke<Autostart>("set_autostart", { on });
 export const guardStatus = () => invoke<GuardStatus>("guard_status");
 export const setGuard = (on: boolean) => invoke<GuardStatus>("set_guard", { on });
 export const setSendHashes = (on: boolean) => invoke<Settings>("set_send_hashes", { on });
