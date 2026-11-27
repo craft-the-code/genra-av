@@ -490,8 +490,10 @@ fn start_scan(app: AppHandle, scope: Scope) -> Result<(), String> {
                 ("folder", dirs.clone(), Vec::new(), Some(genra_av_core::scanner::DEEP), Some(dirs))
             }
         };
+        // Worms on USB sticks hide their copies in hidden folders: walk those on removable drives.
+        let usb = genra_av_core::targets::removable_volumes();
         if folder.is_none() {
-            roots.extend(genra_av_core::targets::removable_volumes());
+            roots.extend(usb.iter().cloned());
             roots = genra_av_core::targets::outermost(roots);
             // Office's own XLSTART sits under Program Files, which a whole-drive scan skips:
             // walk it on its own, as the quick scan does.
@@ -505,6 +507,7 @@ fn start_scan(app: AppHandle, scope: Scope) -> Result<(), String> {
         let mut walk = genra_av_core::scanner::Walk::quick();
         walk.skip = &skip;
         walk.stop = Some(&st.quick_stop);
+        walk.hidden_ok = &usb;
         if let Some(d) = depth {
             walk.max_depth = d;
         }

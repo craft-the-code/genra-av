@@ -37,8 +37,14 @@ pub fn in_startup_folder(path: &Path) -> bool {
 /// Folders the quick scan does not walk into: heavy tool folders, hidden folders (the Hidden
 /// attribute on Windows, a leading dot on Unix), and on macOS only `~/Library` itself.
 pub fn skip_dir(path: &Path) -> bool {
+    skip_dir_in(path, false)
+}
+
+/// [`skip_dir`], walking hidden folders too when `hidden_ok`: on a USB stick, where worms hide
+/// their copies in hidden folders and leave shortcuts in sight.
+pub fn skip_dir_in(path: &Path, hidden_ok: bool) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
-    if skip_dir_name(name) || is_hidden(path) {
+    if skip_dir_name(name) || (!hidden_ok && is_hidden(path)) {
         return true;
     }
     cfg!(target_os = "macos") && home().is_some_and(|h| path == h.join("Library"))

@@ -149,6 +149,39 @@ fn builtin(facts: &extract::Facts) -> Vec<Finding> {
             auto_quarantine: true,
         });
     }
+    if !facts.xlm.is_empty() {
+        let runs = facts.xlm.iter().any(|x| x.contains("runs a macro"));
+        out.push(Finding {
+            rule: if runs { "builtin.xlm_autorun" } else { "builtin.xlm_macro" }.into(),
+            family: "macro".into(),
+            severity: Severity::Suspicious,
+            message_vi: if runs {
+                "Tệp có macro Excel 4.0 tự chạy khi mở: kiểu macro cũ mà phần mềm độc hại hay dùng để né quét."
+            } else {
+                "Tệp có trang macro Excel 4.0: kiểu macro cũ mà phần mềm độc hại hay dùng để né quét."
+            }
+            .into(),
+            message_en: Some(
+                if runs {
+                    "The file has Excel 4.0 macros that run when it opens: an old macro type malware uses to avoid scanners."
+                } else {
+                    "The file has an Excel 4.0 macro sheet: an old macro type malware uses to avoid scanners."
+                }
+                .into(),
+            ),
+            auto_quarantine: true,
+        });
+    }
+    if !facts.remote_templates.is_empty() {
+        out.push(Finding {
+            rule: "builtin.remote_template".into(),
+            family: "remote_template".into(),
+            severity: Severity::Suspicious,
+            message_vi: "Tệp tự tải một mẫu từ ngoài máy khi mở: cách hay dùng để kéo macro độc hại về.".into(),
+            message_en: Some("The file loads a template from outside the computer when it opens: a common way to pull in a harmful macro.".into()),
+            auto_quarantine: true,
+        });
+    }
     if facts.vba.is_empty() {
         return out;
     }

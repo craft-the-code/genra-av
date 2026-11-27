@@ -39,6 +39,12 @@ pub struct Facts {
     /// A VBA project was (or may have been) present but could not be read: treat as suspicious,
     /// never as clean.
     pub vba_unreadable: bool,
+    /// Excel 4.0 (XLM) macros: macro sheets, and names Excel runs on open/close (Auto_Open…).
+    /// Old, but still used by droppers because many scanners only look at VBA.
+    pub xlm: Vec<String>,
+    /// Templates a document loads from outside itself when opened (remote template injection):
+    /// the target, an http(s), UNC or file address.
+    pub remote_templates: Vec<String>,
 }
 
 pub(crate) const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -200,6 +206,29 @@ fn zip_vba(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize) -> Re
         None => None,
     };
     for (i, part) in parts.iter().enumerate() {
+        let ct = types.as_ref().and_then(|t| t.type_of(part));
+        if is_macrosheet(part, ct) {
+            f.xlm.push(format!("Excel 4.0 macro sheet {part}"));
+        }
+        if part.ends_with(".rels") || part == "xl/workbook.xml" {
+            // Small XML parts; one that cannot be read only loses these two checks.
+            if let Ok(xml) = budget.read(&mut ar, i, XML_CAP) {
+                if let Ok(text) = opc::text(&xml) {
+                    if part == "xl/workbook.xml" {
+                        for n in opc::auto_run_names(text).unwrap_or_default() {
+                            f.xlm.push(format!("defined name {n} (runs a macro on open/close)"));
+                        }
+                    } else {
+                        let _ = opc::relationships(text, |r| {
+                            if r.external && is_template_rel(&r.kind_name()) && is_remote(&r.target) {
+                                f.remote_templates.push(r.target.clone());
+                            }
+                        });
+                    }
+                }
+            }
+            continue;
+        }
         let claimed = part.ends_with("vbaproject.bin") || types.as_ref().and_then(|t| t.type_of(part)).is_some_and(is_vba_project_type);
         let head = budget.head(&mut ar, i)?;
         let is_ole = head.starts_with(&OLE_MAGIC);
@@ -227,6 +256,34 @@ fn zip_vba(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize) -> Re
         }
     }
     Ok(())
+}
+
+/// A SpreadsheetML Excel 4.0 macro sheet part, by content type or by its usual folder.
+fn is_macrosheet(part: &str, ct: Option<&str>) -> bool {
+    ct.is_some_and(|t| t.to_ascii_lowercase().contains("macrosheet"))
+        || part.starts_with("xl/macrosheets/")
+        || part.starts_with("xl/intlmacrosheets/")
+}
+
+/// Relationship kinds through which Word loads another document when it opens this one.
+fn is_template_rel(kind: &str) -> bool {
+    matches!(kind, "attachedtemplate" | "frame" | "subdocument")
+}
+
+/// An address outside the computer's own disks: web, FTP or a network share. Word records an
+/// ordinary local template as `file:///C:\...` or `C:\...`; those are not remote.
+pub(crate) fn is_remote(target: &str) -> bool {
+    let t = target.trim().to_ascii_lowercase().replace('\\', "/");
+    if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("ftp://") {
+        return true;
+    }
+    // file://server/share/x (a share) vs file:///c:/x (a local disk).
+    if let Some(rest) = t.strip_prefix("file:") {
+        let rest = rest.trim_start_matches('/');
+        let local_drive = rest.as_bytes().get(1) == Some(&b':') || rest.as_bytes().get(1) == Some(&b'|');
+        return !local_drive && !rest.is_empty() && t.starts_with("file://") && !t.starts_with("file:///");
+    }
+    t.starts_with("//")
 }
 
 /// True for an OLE2 file whose root holds a VBA project directly (`/VBA/dir`): a bare
@@ -282,6 +339,15 @@ fn ole_vba_inner(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize)
             match source {
                 Some(src) => f.vba.push(VbaModule { name: m.name, bytes: src.len(), source: ovba::latin1(&src) }),
                 None => f.vba_unreadable = true,
+            }
+        }
+    }
+    // Excel 4.0 macros in a BIFF8 workbook (the same check the cleaner refuses on). An encrypted
+    // or unusual stream cannot be listed; VBA, if any, is still reported above.
+    for (p, is_stream, _) in &entries {
+        if *is_stream && p.parent() == Some(Path::new("/")) && name_is(p, "Workbook") {
+            if let Ok(data) = read_stream(&mut comp, p, budget) {
+                f.xlm.extend(crate::clean::biff::xlm_macros(&data).unwrap_or_default());
             }
         }
     }

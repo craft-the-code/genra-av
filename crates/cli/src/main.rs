@@ -145,7 +145,8 @@ fn run() -> Result<bool> {
             let rep = load_reputation(pack.as_ref(), rules.as_deref());
             describe(pack.as_ref(), &rep);
             let mut roots = targets::quick_targets();
-            roots.extend(targets::removable_volumes());
+            let usb = targets::removable_volumes();
+            roots.extend(usb.iter().cloned());
             roots.extend(also);
             for r in &roots {
                 eprintln!("target: {}", r.display());
@@ -155,7 +156,10 @@ fn run() -> Result<bool> {
             let cache_path = data.join("scan-cache.json");
             let mut ctx = scanner::Context::new(pack.as_ref(), Some(&rep), scanner::Cache::load(&cache_path));
             let started = std::time::Instant::now();
-            let summary = scanner::walk(&mut ctx, &roots, |_| {});
+            // Hidden folders are walked on USB sticks, where worms hide their copies.
+            let mut walk = scanner::Walk::quick();
+            walk.hidden_ok = &usb;
+            let summary = scanner::walk_with(&mut ctx, &roots, &walk, |_| {});
             ctx.cache.save(&cache_path)?;
             eprintln!(
                 "seen {} files, read {}, remembered {}, rechecked by hash {}, too large {}, in {:.1} s",

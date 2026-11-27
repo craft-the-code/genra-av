@@ -6,6 +6,11 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 ## [Unreleased]
 
 ### Added
+- Detection: Excel 4.0 (XLM) macro sheets and Auto_Open-style names in .xls and .xlsx/.xlsm
+  (`builtin.xlm_macro`, `builtin.xlm_autorun`), and Word documents that load a template from the web
+  or a network share when opened (`builtin.remote_template`). Local templates (`file:///C:/…`) are not
+  flagged. All three are "suspicious".
+- Scans walk hidden folders on removable drives, where USB worms hide their copies.
 - Scan progress bar, scaled by the last finished scan of the same kind (a moving bar otherwise).
 - Roadmap (`docs/roadmap.md`) and code signing policy (`docs/signing.md`).
 - Update dialog "Genra AV Updater": headline, summary and "Có gì mới" in the user's language;

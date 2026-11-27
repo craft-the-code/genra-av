@@ -1637,4 +1637,64 @@ mod tests {
         assert_eq!(panics, 0);
         assert!(slowest < std::time::Duration::from_millis(100), "slowest call {slowest:?}");
     }
+
+    // ---- detection of what the cleaner refuses (crate::scan, built-in findings) ----
+
+    fn builtin_rules(bytes: &[u8]) -> Vec<String> {
+        crate::scan(bytes, None).findings.into_iter().map(|f| f.rule).collect()
+    }
+
+    #[test]
+    fn scan_reports_excel4_macro_sheets_and_auto_open_in_xls() {
+        let mut wb = biff(false);
+        let globals_eof = (0..wb.len()).rev().find(|&i| wb[i..].starts_with(&[0x0A, 0x00, 0x00, 0x00]) && i < 200).unwrap();
+        let tail = wb.split_off(globals_eof);
+        wb.extend(rec(0x0085, &boundsheet(0, 1, "Macro1")));
+        wb.extend(tail.clone());
+        // ole_file() also carries the VBA worm; only the XLM finding is new here.
+        let xlm = |r: Vec<String>| r.into_iter().filter(|x| x.starts_with("builtin.xlm")).collect::<Vec<_>>();
+        assert_eq!(xlm(builtin_rules(&ole_file(&wb))), ["builtin.xlm_macro"]);
+
+        let mut wb = biff(false);
+        let tail = wb.split_off(globals_eof);
+        wb.extend(rec(0x0018, &[0x20, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]));
+        wb.extend(tail);
+        assert_eq!(xlm(builtin_rules(&ole_file(&wb))), ["builtin.xlm_autorun"]);
+        assert!(xlm(builtin_rules(&ole_file(&biff(false)))).is_empty(), "no XLM in a plain workbook");
+    }
+
+    #[test]
+    fn scan_reports_excel4_macro_sheets_in_xlsx() {
+        let ct = r#"<Override PartName="/xl/macrosheets/sheet1.xml" ContentType="application/vnd.ms-excel.macrosheet+xml"/>"#;
+        let input = package("[Content_Types].xml", XL_MAIN_MACRO, ct, &wb_rels(""), WORKBOOK, &[("xl/macrosheets/sheet1.xml", b"<xm:macrosheet/>".to_vec())]);
+        assert!(builtin_rules(&input).contains(&"builtin.xlm_macro".to_string()));
+    }
+
+    fn docx_with_template(target: &str) -> Vec<u8> {
+        let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let ct = format!(
+            r#"<Types xmlns="{NS_CT}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#
+        );
+        let settings = format!(r#"<w:settings xmlns:w="{w}" xmlns:r="{REL}"><w:attachedTemplate r:id="rId1"/></w:settings>"#);
+        let settings_rels = format!(
+            r#"<Relationships xmlns="{NS_RELS}"><Relationship Id="rId1" Type="{REL}/attachedTemplate" Target="{target}" TargetMode="External"/></Relationships>"#
+        );
+        zip_of(&[
+            ("[Content_Types].xml", ct.as_bytes()),
+            ("_rels/.rels", &root_rels("word/document.xml")),
+            ("word/document.xml", format!(r#"<w:document xmlns:w="{w}"/>"#).as_bytes()),
+            ("word/settings.xml", settings.as_bytes()),
+            ("word/_rels/settings.xml.rels", settings_rels.as_bytes()),
+        ])
+    }
+
+    #[test]
+    fn scan_reports_remote_templates_but_not_local_ones() {
+        for remote in ["http://203.0.113.9/t.dotm", "https://x.example/t.dotm", "\\\\203.0.113.9\\share\\t.dotm", "file://server/share/t.dotm"] {
+            assert_eq!(builtin_rules(&docx_with_template(remote)), ["builtin.remote_template"], "{remote}");
+        }
+        for local in ["file:///C:\\Users\\a\\AppData\\Roaming\\Microsoft\\Templates\\Normal.dotm", "C:\\Templates\\Bao cao.dotx", "Normal.dotm"] {
+            assert!(builtin_rules(&docx_with_template(local)).is_empty(), "{local}");
+        }
+    }
 }
