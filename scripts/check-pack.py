@@ -2,7 +2,7 @@
 """Check an unsigned pack before it is signed. Standard library only: this runs in the signing
 job, which holds the key and runs no third-party code.
 
-Usage: check-pack.py <rules/base.json> <out/pack.json> [<prev/pack.json>] [--additions <file>]
+Usage: check-pack.py <rules/base.json> <out/pack.json> [<prev/pack.json>] [--additions <file>] [--yara-expected <dir>]
 
 The build job runs cargo and every crate it pulls in, so its output is not trusted. The only
 thing it may contribute is the hash list; everything else must equal the reviewed base.json
@@ -15,16 +15,21 @@ from this commit. Refuses:
   pack's allow list, on review). Hashes added to the trusted list are written to --additions; the
   signing job re-checks each one with MalwareBazaar (scripts/hash_grade.py verify) before signing;
 - a version not above the previous published pack, or an expiry not within 15 days;
-- fewer hashes than the previous pack (a feed outage must not shrink the list).
+- fewer hashes than the previous pack (a feed outage must not shrink the list);
+- YARA rules other than the file the signing job rebuilt itself from the same sources
+  (scripts/yara-build.sh reproduce, in --yara-expected: same entry, bytes, digest and count), or
+  else exactly the previous signed pack's; a dropped YARA entry; an older YARA Forge release.
 The previous pack's signature is checked with openssl before this script reads it.
 """
 import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 
-GENERATED = {"version", "published", "expires", "hash_sets"}
+GENERATED = {"version", "published", "expires", "hash_sets", "yara"}
+RULE_LINE = re.compile(r"^(?:(?:private|global)[ \t]+)*rule[ \t]+([A-Za-z0-9_]+)", re.ASCII)
 
 
 def fail(msg: str) -> None:
@@ -50,6 +55,11 @@ def main() -> None:
     if "--additions" in args:
         i = args.index("--additions")
         additions_path = args[i + 1]
+        del args[i : i + 2]
+    yara_expected = None
+    if "--yara-expected" in args:
+        i = args.index("--yara-expected")
+        yara_expected = args[i + 1]
         del args[i : i + 2]
     base_path, pack_path = args[0:2]
     prev_path = args[2] if len(args) > 2 else None
@@ -114,10 +124,58 @@ def main() -> None:
         print(f"previous: version {prev['version']}, {prev_count} feed hashes, {len(prev_trusted)} trusted")
     else:
         added = new_trusted
+    prev_pack = json.load(open(prev_path, encoding="utf-8")) if prev_path else None
+    check_yara(pack, os.path.dirname(pack_path), yara_expected, prev_pack, os.path.dirname(prev_path) if prev_path else None)
     if additions_path:
         with open(additions_path, "w") as f:
             f.writelines(d.hex() + "\n" for d in sorted(added))
     print(f"ok: version {version}, {hs['count']} feed hashes, {len(new_trusted)} trusted (+{len(added)}), expires {pack['expires']}")
+
+
+def check_yara(pack: dict, folder: str, expected_dir: str | None, prev: dict | None = None, prev_folder: str | None = None) -> None:
+    """The pack's YARA rules must be either exactly what the signing job rebuilt itself
+    (<expected_dir>/yara.json and the file beside it), or, when the rebuild was not possible this
+    run, exactly the previous signed pack's (carried over). Never dropped once published."""
+    y = pack.get("yara")
+    prev_y = (prev or {}).get("yara")
+    expected = None
+    if expected_dir and os.path.exists(os.path.join(expected_dir, "yara.json")):
+        expected = json.load(open(os.path.join(expected_dir, "yara.json"), encoding="utf-8"))
+    if y is None:
+        if expected is not None or prev_y is not None:
+            fail("the pack dropped its YARA rules")
+        return
+    if set(y) != {"file", "sha256", "rules", "source", "forge_tag", "rl_commit", "malware"}:
+        fail(f"yara fields {sorted(y)} are not the expected ones")
+    if type(y["rules"]) is not int or not all(isinstance(y[k], str) for k in ("file", "sha256", "source", "forge_tag", "rl_commit")):
+        fail("yara field types are wrong")
+    if not isinstance(y["malware"], list) or not all(isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9_]+", n) for n in y["malware"]):
+        fail("yara malware list is not a list of rule names")
+    if not re.fullmatch(r"yara-[0-9a-f]{12}\.yar", y["file"]):
+        fail(f"YARA file name {y['file']!r} is not yara-<sha12>.yar")
+    data = open(os.path.join(folder, y["file"]), "rb").read()
+    if hashlib.sha256(data).hexdigest() != y["sha256"] or y["file"] != f"yara-{y['sha256'][:12]}.yar":
+        fail("YARA digest does not match the pack")
+    n = sum(1 for line in data.decode("utf-8").splitlines() if RULE_LINE.match(line))
+    if n != y["rules"] or n == 0:
+        fail(f"YARA rule count {n} does not match the pack's {y['rules']}")
+    if y == prev_y:
+        if prev_folder:
+            pdata = open(os.path.join(prev_folder, y["file"]), "rb").read()
+            if pdata != data:
+                fail("the carried-over YARA file is not the previous signed one")
+        print(f"yara: {n} rules, carried over from the previous pack")
+        return
+    if expected is None:
+        fail("the pack carries new YARA rules but the signing job rebuilt none to compare")
+    if y != expected:
+        fail("the pack's yara entry differs from the one the signing job rebuilt")
+    want_path = os.path.join(expected_dir, y["file"])
+    if not os.path.exists(want_path) or open(want_path, "rb").read() != data:
+        fail("the YARA rules differ from the ones the signing job rebuilt")
+    if prev_y and y["forge_tag"] < prev_y.get("forge_tag", ""):
+        fail(f"YARA Forge release {y['forge_tag']} is older than the published {prev_y.get('forge_tag')}")
+    print(f"yara: {n} rules, {y['file']}, Forge {y['forge_tag']}, ReversingLabs {y['rl_commit'][:12]}")
 
 
 if __name__ == "__main__":

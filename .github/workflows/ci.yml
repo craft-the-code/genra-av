@@ -34,3 +34,6 @@ jobs:
         run: cargo test --locked -p genra-av-core -p genra-av-machine -p genra-av
       - name: Clippy
         run: cargo clippy --locked -p genra-av-core -p genra-av-machine -p genra-av --all-targets -- -D warnings
+      - name: Pack scripts (standard library tests)
+        shell: bash
+        run: $(command -v python3 || command -v python) -m unittest discover -s scripts -p "test_*.py"

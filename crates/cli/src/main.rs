@@ -72,6 +72,9 @@ enum Cmd {
     /// Hash list tooling for whoever publishes packs.
     #[command(subcommand)]
     Hashes(HashesCmd),
+    /// YARA rule tooling for whoever publishes packs.
+    #[command(subcommand)]
+    Yara(YaraCmd),
     /// Clean the machine, not just the file: health, startup items, repair plans, journal, undo.
     #[command(subcommand)]
     Machine(machine::MachineCmd),
@@ -91,6 +94,14 @@ enum HashesCmd {
     Build { input: PathBuf, out: PathBuf },
     /// Binary list -> one hex SHA-256 per line on stdout (the CI merges a verified previous list this way).
     Dump { input: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum YaraCmd {
+    /// Compile rule blocks (separated by a `// @genra-rule` line, imports before the first one)
+    /// one by one with Genra's engine, in order, and print the names of those it refuses, one per
+    /// line. A rule that needs a refused one is refused too. Then compiles the kept set whole.
+    Check { input: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -217,6 +228,15 @@ fn run() -> Result<bool> {
             out.flush()?;
             Ok(false)
         }
+        Cmd::Yara(YaraCmd::Check { input }) => {
+            let text = std::fs::read_to_string(&input).with_context(|| format!("reading {}", input.display()))?;
+            let (refused, kept) = genra_av_core::yara::check_blocks(&text);
+            for name in &refused {
+                println!("{name}");
+            }
+            eprintln!("{} rules kept, {} refused", kept, refused.len());
+            Ok(false)
+        }
         Cmd::Hashes(HashesCmd::Build { input, out }) => {
             let bin = HashList::build_from_text(&std::fs::read_to_string(&input)?)?;
             std::fs::write(&out, &bin)?;
@@ -287,7 +307,10 @@ fn run() -> Result<bool> {
             // Strict here: a publisher must not build on a list that does not match its pack.
             let dir = pack.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
             let rep = Reputation::load(&p, dir)?;
-            eprintln!("ok: version {}, {} rules, {} hashes, signature valid", p.version, p.rules.len(), rep.entries());
+            eprintln!("ok: version {}, {} rules, {} hashes, {} YARA rules, signature valid", p.version, p.rules.len(), rep.entries(), rep.yara().map(|y| y.len()).unwrap_or(0));
+            if let Some(e) = rep.yara_error() {
+                eprintln!("warning: YARA rules not in use: {e}");
+            }
             Ok(false)
         }
     }
@@ -344,7 +367,7 @@ fn data_dir() -> Result<PathBuf> {
 /// stop the scan: it warns and goes on with rules and heuristics only.
 fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Reputation {
     let loaded = match (pack, rules.and_then(|r| r.parent())) {
-        (Some(p), Some(dir)) if !p.hash_sets.is_empty() => Reputation::load(p, if dir.as_os_str().is_empty() { Path::new(".") } else { dir }),
+        (Some(p), Some(dir)) if !p.hash_sets.is_empty() || p.yara.is_some() => Reputation::load(p, if dir.as_os_str().is_empty() { Path::new(".") } else { dir }),
         _ => Ok(Reputation::default()),
     };
     loaded.unwrap_or_else(|e| {
@@ -355,7 +378,13 @@ fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Reputation {
 
 fn describe(pack: Option<&Pack>, rep: &Reputation) {
     match pack {
-        Some(p) => eprintln!("rules: version {} ({} rules, {} known-bad hashes)", p.version, p.rules.len(), rep.entries()),
+        Some(p) => {
+            let yara = rep.yara().map(|y| y.len()).unwrap_or(0);
+            eprintln!("rules: version {} ({} rules, {} known-bad hashes, {} YARA rules)", p.version, p.rules.len(), rep.entries(), yara);
+            if let Some(e) = rep.yara_error() {
+                eprintln!("warning: YARA rules not in use ({e}); hash lists and the other checks are");
+            }
+        }
         None => eprintln!("rules: none loaded, built-in heuristics only"),
     }
 }

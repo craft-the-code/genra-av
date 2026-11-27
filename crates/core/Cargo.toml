@@ -19,6 +19,7 @@ ed25519-dalek = "2"
 getrandom = "0.2"
 quick-xml = "0.42"
 memchr = "2"
+boreal = { version = "1.4", default-features = false, features = ["object", "hash", "authenticode"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

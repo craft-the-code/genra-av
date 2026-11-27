@@ -33,6 +33,31 @@ pub struct Pack {
     /// SHA-256, so the signature over this JSON covers them.
     #[serde(default)]
     pub hash_sets: Vec<HashSetRef>,
+    /// YARA rules for malware families shipped beside this JSON (see `yara`), named by digest
+    /// like the hash lists. Older clients ignore the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yara: Option<YaraRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraRef {
+    /// Plain file name next to the pack, e.g. `yara-0123abcd.yar`.
+    pub file: String,
+    pub sha256: String,
+    /// Number of `rule` declarations, checked on load.
+    pub rules: u64,
+    /// Where the rules come from and under which licences, e.g. "YARA Forge core + ReversingLabs".
+    pub source: String,
+    /// The YARA Forge release and ReversingLabs commit the file was built from (the signing job
+    /// refuses to go back to older ones).
+    #[serde(default)]
+    pub forge_tag: String,
+    #[serde(default)]
+    pub rl_commit: String,
+    /// Rules rated malware (quarantined without asking): reviewed in this repository
+    /// (rules/yara-malware.json), never read from rule text. Every other match is suspicious.
+    #[serde(default)]
+    pub malware: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

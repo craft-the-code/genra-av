@@ -4,7 +4,9 @@
 //! (a mislabelled entry, a poisoned feed), the damage is largest for files every PC has: signed
 //! system and vendor programs. So a file that carries a valid Authenticode signature is never
 //! quarantined on hash evidence alone; its hash hits are lowered to "suspicious" and the user is
-//! asked, as for any other suspicious file. Rules and the built-in checks are not affected.
+//! asked, as for any other suspicious file. The same holds for YARA rules (a rule set written by
+//! others, rated malware in the pack): signature evidence alone never moves a signed program.
+//! Genra's own pack rules and the built-in checks are not affected.
 
 use genra_av_core::rules::Severity;
 use genra_av_core::{Finding, Report};
@@ -16,12 +18,13 @@ use std::path::Path;
 /// programs; macOS and Linux files are not quarantined on hash evidence by the app).
 pub fn signed_file_rail(report: &mut Report, path: &Path) -> bool {
     let serious: Vec<&Finding> = report.findings.iter().filter(|f| f.severity >= Severity::Suspicious).collect();
-    let hash_alone = !serious.is_empty() && serious.iter().all(|f| f.rule.starts_with("hash."));
+    let listed = |f: &Finding| f.rule.starts_with("hash.") || f.rule.starts_with("yara.");
+    let hash_alone = !serious.is_empty() && serious.iter().all(|f| listed(f));
     let would_quarantine = serious.iter().any(|f| f.auto_quarantine && f.severity == Severity::Malware);
     if !(hash_alone && would_quarantine) || !validly_signed(path) {
         return false;
     }
-    for f in report.findings.iter_mut().filter(|f| f.rule.starts_with("hash.")) {
+    for f in report.findings.iter_mut().filter(|f| listed(f)) {
         f.severity = Severity::Suspicious;
         f.auto_quarantine = false;
     }

@@ -3,7 +3,7 @@
 #
 # - malware (ubuntu): downloads the newest MalwareBazaar samples per file type (AES zips, password
 #   "infected"), unpacks them into a scratch folder on this runner, scans them with the CLI and the
-#   published signed pack, and deletes them. Nothing is executed; samples are never uploaded.
+#   published signed pack (with yara_preview: plus YARA rules built on the run), and deletes them. Nothing is executed; samples are never uploaded.
 # - clean (windows): scans Windows' own programs and libraries (System32, signed by Microsoft) and
 #   Office files without macros, as the false-positive corpus.
 # - report: one Markdown table in the run summary, numbers kept as an artifact for comparison.
@@ -17,6 +17,10 @@ on:
       per_type:
         description: Samples per file type (MalwareBazaar has a daily download quota)
         default: "20"
+      yara_preview:
+        description: Build the YARA rules on this run and add them to an unsigned copy of the pack (branch runs, before the rules are published)
+        type: boolean
+        default: false
   schedule:
     - cron: "17 3 * * 1"
 
@@ -41,15 +45,13 @@ jobs:
           persist-credentials: false
       - name: Build the CLI
         run: cargo build --release -p genra-av --locked
-      - name: Signed rule pack and hash lists
+      - name: Signed rule pack, hash lists and YARA rules
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release download rules-latest -p pack.json -p pack.json.sig -D pack
-          python3 -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json")).get("hash_sets", [])]' > lists
-          grep -qvE '^[A-Za-z0-9._-]+\.bin$' lists && { echo "odd hash list name"; exit 1; }
-          while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
+          flags=$(scripts/eval/get-pack.sh pack ./target/release/genra-av ${{ inputs.yara_preview && 'preview' || '' }})
+          echo "PACK_FLAGS=$flags" >> "$GITHUB_ENV"
       - name: Fetch samples
         env:
           ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
@@ -77,7 +79,7 @@ jobs:
           # Files only: folders keep their execute bit so they can still be walked and deleted.
           find "$s" -type f -exec chmod a-x {} +
           # The scan's exit code says "something found"; an empty result is the failure to catch.
-          ./target/release/genra-av scan --rules pack/pack.json --pubkey keys/pack-1.pub --json "$s" > malware.jsonl || true
+          ./target/release/genra-av scan $PACK_FLAGS --json "$s" > malware.jsonl || true
           cp "$RUNNER_TEMP/zips/manifest.json" manifest.json
           rm -rf "$s" "$RUNNER_TEMP/zips"
           echo "scanned: $(wc -l < malware.jsonl)"
@@ -104,26 +106,24 @@ jobs:
           persist-credentials: false
       - name: Build the CLI
         run: cargo build --release -p genra-av --locked
-      - name: Signed rule pack and hash lists
+      - name: Signed rule pack, hash lists and YARA rules
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release download rules-latest -p pack.json -p pack.json.sig -D pack
-          python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json", encoding="utf-8")).get("hash_sets", [])]' | tr -d '\r' > lists
-          grep -qvE '^[A-Za-z0-9._-]+\.bin$' lists && { echo "odd hash list name"; exit 1; }
-          while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
+          flags=$(scripts/eval/get-pack.sh pack ./target/release/genra-av.exe ${{ inputs.yara_preview && 'preview' || '' }})
+          echo "PACK_FLAGS=$flags" >> "$GITHUB_ENV"
       - name: Clean corpus
         run: |
           mkdir -p clean/office
           # Office files without macros, made fresh so nothing in them is ours or borrowed.
           python -m pip install --quiet python-docx==1.1.2 openpyxl==3.1.5
           python scripts/eval/make_clean_office.py clean/office 200
-          ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json clean/office > clean-office.jsonl || true
-          ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
+          ./target/release/genra-av.exe scan $PACK_FLAGS --json clean/office > clean-office.jsonl || true
+          ./target/release/genra-av.exe scan $PACK_FLAGS --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
           # Shortcuts and scripts Windows and installed programs ship: the false-positive check for
           # the shortcut and script heuristics.
-          ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json \
+          ./target/release/genra-av.exe scan $PACK_FLAGS --json \
             "C:/ProgramData/Microsoft/Windows/Start Menu" "C:/Users/Public/Desktop" \
             "C:/Windows/System32/WindowsPowerShell/v1.0/Modules" "C:/Program Files/WindowsPowerShell/Modules" \
             > clean-scripts.jsonl 2>/dev/null || true

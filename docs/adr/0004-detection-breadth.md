@@ -52,13 +52,22 @@ quarantine anything.
   address. The server keeps no request log with IP addresses or prefixes beyond rate limiting.
   On by default (decided below).
 
-### 2. YARA-X rules for families
+### 2. YARA rules for families
 
-- Engine: [YARA-X](https://github.com/VirusTotal/yara-x) (Rust, BSD-3-Clause): same language as the
-  YARA rules the industry shares, safe to embed, no C dependency.
+- Engine: the YARA rule language the industry shares, run by
+  [boreal](https://github.com/vthib/boreal) (pure Rust, MIT/Apache-2.0). First planned as
+  [YARA-X](https://github.com/VirusTotal/yara-x); changed on 27/11 after measuring both on the same
+  2 865 licensed rules (macOS, release build): YARA-X adds about 17 MB to the program (it compiles
+  rules to WebAssembly and carries wasmtime), boreal about 2.6 MB; boreal compiled the set in 0.18 s
+  against 1.8 s and scanned about twice as fast. Boreal has one main maintainer, so the engine sits
+  behind one module (`crates/core/src/yara.rs`): swapping it back is one file. Details in
+  docs/yara-rules.md.
 - Rules: open sets with licences we may redistribute (ReversingLabs YARA rules, MIT; rules from YARA
-  Forge whose own licence is permissive). The CI checks every rule's licence metadata and drops the
-  rest. Rules travel in the signed pack as source and compile on the client.
+  Forge whose own licence is MIT, BSD, Apache-2.0 or the Detection Rule License). The CI checks every
+  rule's licence metadata and drops the rest. Rules travel in the signed pack as source and compile on
+  the client. The signing job rebuilds the rule file from the same sources itself and signs only an
+  identical file. About 3 100 rules ship (tool, exploit and generic indicator rules are left out
+  for now); details and the trust chain in docs/yara-rules.md.
 - Each rule carries a severity. Only rules with a measured false-positive rate of zero on the clean
   corpus (layer 5) may be `malware`; the rest are `suspicious`.
 
@@ -140,7 +149,7 @@ ClamAV, YARA, capa and Loki carry decades of detection practice. Take the ideas,
 | From | Take | Leave |
 |---|---|---|
 | ClamAV | Section and import hashes for PE files (a family rebuilt with new resources keeps its code sections); unpacking archives with budgets; signature categories (PUA vs malware); incremental database updates | The 300 MB database loaded in RAM, the GPL engine in-process, scanning every file type on disk |
-| YARA / YARA-X | The rule language everyone shares, run by the embeddable YARA-X engine | Rule sets we may not redistribute, slow rules (the CI rejects rules over a time budget on the corpus) |
+| YARA / YARA-X | The rule language everyone shares, run by an embeddable pure-Rust engine (boreal) | Rule sets we may not redistribute, slow rules (each file's YARA scan stops after 1.5 s; a CI time budget per rule is still to do) |
 | capa | Describing what a program can do (downloads, persists, injects) to explain a finding in plain words | Its full disassembly at scan time |
 | Loki / THOR Lite | Filename and path indicators for the places malware drops itself | Scanning the whole disk by default |
 
@@ -159,7 +168,7 @@ main button; "Dọn sạch giúp tôi" fixes what the threat left behind. Messag
 1. Graded hashes, families list and the measurement harness (gives numbers for everything after).
 2. Archive scanning and script/shortcut/disguise heuristics (where Vietnamese users get hit), with
    USB disinfection (unhide the real folders), then disinfection on the machine (4b).
-3. YARA-X engine and licensed rule sets.
+3. YARA engine (boreal) and licensed rule sets.
 4. Defender second opinion.
 5. Online k-anonymity lookup (after the privacy decision).
 

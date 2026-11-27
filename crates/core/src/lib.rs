@@ -11,6 +11,7 @@ pub mod reputation;
 pub mod rules;
 pub mod scanner;
 pub mod targets;
+pub mod yara;
 
 use extract::{Kind, VbaModule};
 use rules::{Pack, Severity};
@@ -74,7 +75,8 @@ const PROGRAM_EXT: &[&str] = &["exe", "scr", "com", "pif", "cpl", "dll", "js", "
 /// [`scan_with`] plus the checks that need the file's name: disguised names, scripts and shortcuts
 /// by type, and what is inside a plain zip (each entry scanned the same way, a few levels deep).
 pub fn scan_named(name: &str, bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputation::Reputation>) -> Report {
-    scan_named_at(name, bytes, pack, reputation, 0)
+    // One YARA time budget for the file and every archive entry inside it.
+    yara::with_budget(|| scan_named_at(name, bytes, pack, reputation, 0))
 }
 
 fn scan_named_at(name: &str, bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputation::Reputation>, depth: usize) -> Report {
@@ -171,6 +173,10 @@ pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputati
         });
     }
     findings.extend(builtin(&facts));
+    if let Some(y) = reputation.and_then(|r| r.yara()) {
+        let off = |id: &str| pack.is_some_and(|p| p.disabled.iter().any(|d| d == id));
+        findings.extend(y.findings(bytes).into_iter().filter(|f| !off(&f.rule)));
+    }
 
     let allowed = pack.is_some_and(|p| p.allow_sha256.iter().any(|h| h.eq_ignore_ascii_case(&sha256)));
     if allowed {
