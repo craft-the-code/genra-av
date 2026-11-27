@@ -3,14 +3,14 @@
 | Platform | Status | How |
 |---|---|---|
 | macOS | Signed and notarised | Developer ID "Hoan Le (ZJSCM99CY3)", `release.yml` |
-| Windows | **Unsigned until SignPath approves** | SignPath Foundation (free for open source); publisher shows as "SignPath Foundation" |
+| Windows | **Unsigned** | SignPath Foundation declined on 27/11/2026 (the project is too new to show public adoption; reapply later). Until then users follow the [install guide](install/windows.vi.md) ([English](install/windows.en.md)). Options: reapply to SignPath or OSSign (6 months of activity), Certum open-source certificate (about €49 a year), Microsoft Store (signed by Microsoft) |
 | Linux | Not signed (AppImage/deb) | SHA256SUMS and build attestations |
 | All | Build provenance | GitHub artifact attestations; `gh attestation verify <file> --repo craft-the-code/genra-av` |
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org) (once approved; Windows installers before that are unsigned).
+Windows installers are not signed yet. When they are, this section names the signing service and
+certificate; the policy below applies from the first signed release.
 
 - Committers and reviewers: [members of craft-the-code](https://github.com/orgs/craft-the-code/people)
 - Approvers: [owners of craft-the-code](https://github.com/orgs/craft-the-code/people?query=role%3Aowner)

@@ -7,7 +7,8 @@
     "createUpdaterArtifacts": false,
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "languages": ["Vietnamese", "English"]
       },
       "wix": {
         "upgradeCode": "58b030d2-d1c7-507b-9dcb-fa4f08cbc6fe"
