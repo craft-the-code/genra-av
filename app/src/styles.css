@@ -292,7 +292,7 @@ h3 { font-size: 17px; line-height: 24px; font-weight: 700; margin: 0; }
 .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; font-size: 12px; }
 
 /* Report form */
-.report textarea {
+.report textarea, .compose textarea {
   width: 100%; min-height: 72px; resize: vertical; margin-top: 6px;
   padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface-2);
 }
@@ -387,3 +387,4 @@ legend { font-size: 17px; line-height: 24px; font-weight: 700; padding: 0; margi
 .modal-actions { display: flex; justify-content: space-between; gap: 12px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 .plan-note { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; }
 .spinner.small { width: 14px; height: 14px; border-width: 2px; }
+.btn.small { padding: 6px 12px; font-size: 13px; flex: none; }

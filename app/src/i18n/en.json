@@ -307,5 +307,14 @@
   "done.text.partial": "Windows did not let Genra finish everything. Restart, then scan once more to finish.",
   "result.plan.loading": "Genra is working out exactly what to clean…",
   "result.plan.more": "and {n} more steps",
-  "result.plan.excel": "Excel has a file open that needs cleaning: Genra will ask you to close Excel first."
+  "result.plan.excel": "Excel has a file open that needs cleaning: Genra will ask you to close Excel first.",
+  "message.compose": "Write a message",
+  "message.title": "A message for whoever sent the file",
+  "message.hint": "Edit it if you like, then copy it and paste it into Zalo or an email to them.",
+  "message.body": "Hi, the file “{name}” you sent me contains {threat}. I cleaned it with Genra AV. Your computer may be infected too and pass it on to the next files you send. Please scan and clean it, for example with the free Genra AV: https://github.com/craft-the-code/genra-av/releases",
+  "message.threat": "malware",
+  "message.copy": "Copy the message",
+  "message.copied": "Copied",
+  "message.paste": "Open Zalo, pick the person who sent the file, paste it into the message box and send.",
+  "message.close": "Close"
 }
