@@ -316,5 +316,8 @@
   "message.copy": "Copy the message",
   "message.copied": "Copied",
   "message.paste": "Open Zalo, pick the person who sent the file, paste it into the message box and send.",
-  "message.close": "Close"
+  "message.close": "Close",
+  "settings.shell_menu": "“Check with Genra AV” when you right-click a file",
+  "settings.shell_menu.text": "Right-click a file in File Explorer to check it at once. On Windows 11 it is under “Show more options”.",
+  "settings.shell_menu.error": "Could not add it to the menu: {detail}"
 }

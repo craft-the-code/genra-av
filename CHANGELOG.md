@@ -13,6 +13,11 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - "Soạn lời nhắn" (mock 5) on the done and quarantined screens: a ready, editable message for whoever
   sent the file (file name, the threat in plain words, a link to Genra AV's releases), copied with one
   press for Zalo or email. Nothing is sent by Genra.
+- Explorer right-click "Kiểm tra bằng Genra AV" (Windows, J1): a per-user verb under
+  `HKCU\Software\Classes\*\shell\GenraAV`, written by the app at start (label in the window's
+  language) and removed by the NSIS uninstaller or the new switch in Cài đặt (on by default).
+- One running Genra (`tauri-plugin-single-instance`): a second launch with a file hands it to the open
+  window, which comes to the front and checks it.
 
 ### Changed
 - Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and

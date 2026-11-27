@@ -9,6 +9,7 @@ mod packs;
 mod quick;
 mod repair;
 mod settings;
+mod shell;
 mod util;
 
 use allow::Allow;
@@ -769,6 +770,39 @@ fn get_settings(st: St) -> Settings {
     st.settings.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
+/// The Explorer menu as the window shows it in Cài đặt.
+#[derive(Serialize)]
+struct ShellMenu {
+    supported: bool,
+    on: bool,
+    /// Writing the entry failed (shown under the switch); the setting is kept anyway.
+    error: Option<String>,
+}
+
+fn sync_shell_menu(st: &AppState, lang: &str) -> ShellMenu {
+    let on = st.settings.lock().map(|s| s.shell_menu).unwrap_or(true);
+    let error = if shell::SUPPORTED { shell::sync(on, lang).err().map(|e| format!("{e:#}")) } else { None };
+    ShellMenu { supported: shell::SUPPORTED, on, error }
+}
+
+/// Called by the window at start and when its language changes: the menu entry follows the
+/// setting, with the label in the window's language.
+#[tauri::command]
+fn shell_menu(st: St, lang: String) -> ShellMenu {
+    sync_shell_menu(&st, &lang)
+}
+
+/// The switch in Cài đặt.
+#[tauri::command]
+fn set_shell_menu(st: St, on: bool, lang: String) -> Result<ShellMenu, String> {
+    {
+        let mut s = st.settings.lock().map_err(|e| e.to_string())?;
+        s.shell_menu = on;
+        s.save(&st.data).map_err(|e| e.to_string())?;
+    }
+    Ok(sync_shell_menu(&st, &lang))
+}
+
 #[tauri::command]
 fn set_send_hashes(st: St, on: bool) -> Result<Settings, String> {
     let mut s = st.settings.lock().map_err(|e| e.to_string())?;
@@ -933,6 +967,21 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so a second launch ("Kiểm tra bằng Genra AV" while Genra is open) hands its file
+        // to this window and exits before anything else starts.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+            if let Some(p) = shell::file_arg(&argv, &cwd) {
+                if let Some(st) = app.try_state::<AppState>() {
+                    st.allow(&p);
+                    let _ = app.emit("open-path", p.to_string_lossy().into_owned());
+                }
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -1010,6 +1059,8 @@ pub fn run() {
             get_install_id,
             get_settings,
             set_send_hashes,
+            shell_menu,
+            set_shell_menu,
             report_false_positive
         ])
         .run(tauri::generate_context!())

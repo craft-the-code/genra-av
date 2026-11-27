@@ -137,7 +137,9 @@ export interface StartupItem {
 }
 export interface GuardPlace { kind: "downloads" | "zalo" | "usb"; paths: string[] }
 export interface MachineOverview { health: HealthItem[]; startup: StartupItem[]; guard: GuardPlace[] }
-export interface Settings { send_hashes: boolean }
+export interface Settings { send_hashes: boolean; shell_menu: boolean }
+/** "Kiểm tra bằng Genra AV" in the Explorer menu (Windows only). */
+export interface ShellMenu { supported: boolean; on: boolean; error: string | null }
 
 export const rulesInfo = () => invoke<RulesInfo>("rules_info");
 export const launchPath = () => invoke<string | null>("launch_path");
@@ -170,6 +172,8 @@ export type UpdateInfo = { version: string; notes: string | null };
 export const checkUpdate = () => invoke<UpdateInfo | null>("check_update");
 export const installUpdate = () => invoke<void>("install_update");
 export const getSettings = () => invoke<Settings>("get_settings");
+export const shellMenu = (lang: string) => invoke<ShellMenu>("shell_menu", { lang });
+export const setShellMenu = (on: boolean, lang: string) => invoke<ShellMenu>("set_shell_menu", { on, lang });
 export const setSendHashes = (on: boolean) => invoke<Settings>("set_send_hashes", { on });
 export const reportFalsePositive = (sha256: string, ruleId: string | null, note: string | null) =>
   invoke<void>("report_false_positive", { sha256, ruleId, note });
@@ -179,4 +183,6 @@ export const onQuickDone = (f: (r: QuickResult) => void): Promise<UnlistenFn> =>
 export const onRepairProgress = (f: (p: RepairProgress) => void): Promise<UnlistenFn> =>
   listen<RepairProgress>("repair-progress", (e) => f(e.payload));
 export const onRulesChanged = (f: () => void): Promise<UnlistenFn> => listen("rules-changed", () => f());
+/** A file sent to the running Genra ("Kiểm tra bằng Genra AV" while the window is open). */
+export const onOpenPath = (f: (path: string) => void): Promise<UnlistenFn> => listen<string>("open-path", (e) => f(e.payload));
 export const onDropped = (f: (paths: string[]) => void): Promise<UnlistenFn> => listen<string[]>("dropped", (e) => f(e.payload));
