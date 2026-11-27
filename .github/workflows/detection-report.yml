@@ -1,0 +1,144 @@
+# Detection report (ADR 0004, "measurement gates every layer"): how much recent malware Genra catches,
+# per file type, with and without the hash lists, and how many clean files it wrongly flags.
+#
+# - malware (ubuntu): downloads the newest MalwareBazaar samples per file type (AES zips, password
+#   "infected"), unpacks them into a scratch folder on this runner, scans them with the CLI and the
+#   published signed pack, and deletes them. Nothing is executed; samples are never uploaded.
+# - clean (windows): scans Windows' own programs and libraries (System32, signed by Microsoft) and
+#   Office files without macros, as the false-positive corpus.
+# - report: one Markdown table in the run summary, numbers kept as an artifact for comparison.
+#
+# Runs weekly and by hand; a release should link the latest report.
+name: detection-report
+
+on:
+  workflow_dispatch:
+    inputs:
+      per_type:
+        description: Samples per file type
+        default: "40"
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: detection-report
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  TYPES: "exe dll doc xls docm xlsm docx xlsx js vbs hta ps1 bat lnk zip rar 7z iso msi"
+
+jobs:
+  malware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build the CLI
+        run: cargo build --release -p genra-av --locked
+      - name: Signed rule pack and hash lists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download rules-latest -p pack.json -p pack.json.sig -D pack
+          python3 -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json")).get("hash_sets", [])]' > lists
+          grep -qvE '^[A-Za-z0-9._-]+\.bin$' lists && { echo "odd hash list name"; exit 1; }
+          while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
+      - name: Fetch samples
+        env:
+          ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
+          PER_TYPE: ${{ inputs.per_type || '40' }}
+        run: |
+          # shellcheck disable=SC2086
+          python3 scripts/eval/fetch_malware.py "$RUNNER_TEMP/zips" "$PER_TYPE" $TYPES
+      - name: Unpack, scan, delete
+        run: |
+          set -euo pipefail
+          s="$RUNNER_TEMP/samples"
+          for d in "$RUNNER_TEMP"/zips/*/; do
+            t=$(basename "$d")
+            mkdir -p "$s/$t"
+            for z in "$d"*.zip; do
+              [ -e "$z" ] || continue
+              sha=$(basename "$z" .zip)
+              # One file per sample, named by its hash so the report can find its family.
+              7z e -y -pinfected -o"$s/$t/tmp" "$z" >/dev/null 2>&1 || continue
+              f=$(find "$s/$t/tmp" -type f | head -n 1)
+              [ -n "$f" ] && mv "$f" "$s/$t/$sha"
+              rm -rf "$s/$t/tmp"
+            done
+          done
+          chmod -R a-x "$s"
+          ./target/release/genra-av scan --rules pack/pack.json --json "$s" > malware.jsonl || true
+          cp "$RUNNER_TEMP/zips/manifest.json" manifest.json
+          rm -rf "$s" "$RUNNER_TEMP/zips"
+          wc -l < malware.jsonl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: malware-results
+          path: |
+            malware.jsonl
+            manifest.json
+          retention-days: 30
+
+  clean:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build the CLI
+        run: cargo build --release -p genra-av --locked
+      - name: Signed rule pack and hash lists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download rules-latest -p pack.json -p pack.json.sig -D pack
+          python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json")).get("hash_sets", [])]' > lists
+          while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
+      - name: Clean corpus
+        run: |
+          mkdir -p clean/office
+          # Office files without macros, made fresh so nothing in them is ours or borrowed.
+          python -m pip install --quiet python-docx==1.1.2 openpyxl==3.1.5
+          python scripts/eval/make_clean_office.py clean/office 200
+          ./target/release/genra-av.exe scan --rules pack/pack.json --json clean/office > clean-office.jsonl || true
+          ./target/release/genra-av.exe scan --rules pack/pack.json --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
+          wc -l clean-*.jsonl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: clean-results
+          path: clean-*.jsonl
+          retention-days: 30
+
+  report:
+    needs: [malware, clean]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: results
+          merge-multiple: true
+      - name: Report
+        run: |
+          python3 scripts/eval/report.py --malware results/malware.jsonl --manifest results/manifest.json \
+            --clean results/clean-office.jsonl --clean results/clean-system32.jsonl --json report.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: detection-report
+          path: report.json
+          retention-days: 90
