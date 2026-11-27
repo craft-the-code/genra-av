@@ -167,7 +167,12 @@ fn run() -> Result<bool> {
                 started.elapsed().as_secs_f32()
             );
             let q = if quarantine { Some(Quarantine::open(data.join("quarantine"))?) } else { None };
-            for hit in &summary.hits {
+            let mut hits = summary.hits;
+            for hit in &mut hits {
+                // A validly signed program is never quarantined on a hash match alone (ADR 0004).
+                genra_av_machine::rails::signed_file_rail(&mut hit.report, &hit.path);
+            }
+            for hit in &hits {
                 print_report(&hit.path, &hit.report);
                 // Only a reviewed rule, a heuristic or a trusted hash list moves a file; a match
                 // on a public hash feed alone is reported and left in place.
@@ -185,7 +190,7 @@ fn run() -> Result<bool> {
                     }
                 }
             }
-            Ok(!summary.hits.is_empty())
+            Ok(!hits.is_empty())
         }
         Cmd::Quarantine(cmd) => {
             let q = Quarantine::open(data_dir()?.join("quarantine"))?;

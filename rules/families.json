@@ -1,0 +1,13 @@
+{
+  "about": "Commodity malware families whose MalwareBazaar entries may become trusted (quarantined without asking) once corroborated (ADR 0004, layer 1). Names as MalwareBazaar spells them, compared without case. never_trusted: legitimate software MalwareBazaar also lists (remote-support tools and the like); their hashes stay suspicious whatever the label says.",
+  "families": [
+    "AgentTesla", "Amadey", "AsyncRAT", "DarkGate", "DCRat", "Emotet", "Heodo", "Formbook", "XLoader",
+    "GuLoader", "LummaStealer", "MassLogger", "NanoCore", "njrat", "PureLogsStealer", "QakBot",
+    "RedLineStealer", "RemcosRAT", "SmokeLoader", "SnakeKeylogger", "404Keylogger", "Stealc",
+    "ValleyRAT", "Vidar", "XWorm", "WARDENStealer", "SalatStealer", "CNBackdoor", "LxBaseRAT"
+  ],
+  "never_trusted": [
+    "ConnectWise", "ScreenConnect", "AnyDesk", "TeamViewer", "NetSupport", "AteraAgent", "SimpleHelp",
+    "Splashtop", "RemoteUtilities", "MeshAgent", "Level", "PDQConnect"
+  ]
+}

@@ -16,6 +16,7 @@ pub mod health;
 pub mod journal;
 pub mod office;
 mod proc;
+pub mod rails;
 pub mod reg;
 pub mod repair;
 pub mod startup;
