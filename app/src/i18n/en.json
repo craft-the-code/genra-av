@@ -330,5 +330,7 @@
   "settings.guard.text": "While Genra is open, every new file in Downloads and Zalo is checked at once, and a USB stick is scanned when plugged in. If nothing is found, Genra stays quiet.",
   "settings.autostart": "Start with the computer",
   "settings.autostart.text": "Genra starts in the system tray when you sign in, to guard, without opening its window. Closing the window keeps it guarding from the tray.",
-  "settings.autostart.error": "Could not set it: {detail}"
+  "settings.autostart.error": "Could not set it: {detail}",
+  "settings.online_lookup": "Online check",
+  "settings.online_lookup.text": "To check a file, Genra sends the first 5 characters of its fingerprint (shared by about one file in a million), never the file. The match is made on your computer."
 }

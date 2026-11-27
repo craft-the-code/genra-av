@@ -33,6 +33,12 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - Hash feeds (ADR 0004, 1b): URLhaus payloads with a named family and ThreatFox SHA-256 IOCs at
   confidence 75 or more join the untrusted ("Đáng ngờ") hash list on each rule-pack run
   (`scripts/abusech_feeds.py`, optional per feed). The trusted list is still graded from MalwareBazaar only.
+- Online lookup by hash prefix (ADR 0004 step 5), **built but switched off** (`lookup::AVAILABLE = false`)
+  until the privacy policy change ships (draft in `docs/legal/online-lookup.md`): backend
+  `GET /v1/lookup/<5 hex>` over a `known_bad` table (migration 0002, loaded by
+  `scripts/known-bad-sql.py`, cached by Cloudflare, nothing stored about the asker); the app sends only
+  the prefix for files nothing flagged (checked by hand or by the guard), matches on the machine, and
+  a match is "Đáng ngờ" (`hash.online`), never moved automatically. Setting `online_lookup`, on by default.
 
 ### Changed
 - Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and

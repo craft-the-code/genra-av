@@ -106,3 +106,10 @@ export function checkSampleBody(bytes: Uint8Array): Result<Uint8Array> {
   if (!OLE_MAGIC.every((b, i) => bytes[i] === b)) return { ok: false, error: "sample must be an extracted VBA project (OLE2)" };
   return { ok: true, value: bytes };
 }
+
+/** The online lookup's prefix: exactly the first 5 hex characters of a SHA-256 (20 bits), lower case. */
+export const PREFIX_LEN = 5;
+export function parsePrefix(raw: string): Result<string> {
+  const p = raw.toLowerCase();
+  return /^[0-9a-f]{5}$/.test(p) ? { ok: true, value: p } : { ok: false, error: "prefix must be 5 hex characters" };
+}

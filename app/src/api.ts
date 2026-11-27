@@ -142,6 +142,8 @@ export interface Settings { send_hashes: boolean; shell_menu: boolean; guard: bo
 export interface GuardStatus { on: boolean; folders: string[]; usb: string[]; scanning: string | null }
 /** "Mở cùng máy": the setting, the login item (null in development builds), an error. */
 export interface Autostart { on: boolean; registered: boolean | null; error: string | null }
+/** Online lookup by hash prefix: `available` is false until the privacy policy change ships. */
+export interface OnlineLookup { available: boolean; on: boolean }
 export interface GuardUsb { drive: string; done: boolean; hits: number }
 /** "Kiểm tra bằng Genra AV" in the Explorer menu (Windows only). */
 export interface ShellMenu { supported: boolean; on: boolean; error: string | null }
@@ -181,6 +183,8 @@ export const shellMenu = (lang: string) => invoke<ShellMenu>("shell_menu", { lan
 export const setShellMenu = (on: boolean, lang: string) => invoke<ShellMenu>("set_shell_menu", { on, lang });
 export const autostart = () => invoke<Autostart>("autostart");
 export const setAutostart = (on: boolean) => invoke<Autostart>("set_autostart", { on });
+export const onlineLookup = () => invoke<OnlineLookup>("online_lookup");
+export const setOnlineLookup = (on: boolean) => invoke<OnlineLookup>("set_online_lookup", { on });
 export const guardStatus = () => invoke<GuardStatus>("guard_status");
 export const setGuard = (on: boolean) => invoke<GuardStatus>("set_guard", { on });
 export const setSendHashes = (on: boolean) => invoke<Settings>("set_send_hashes", { on });

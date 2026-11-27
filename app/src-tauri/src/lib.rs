@@ -5,6 +5,7 @@
 mod allow;
 mod guard;
 mod history;
+mod lookup;
 pub mod machine;
 mod packs;
 mod quick;
@@ -60,6 +61,8 @@ struct AppState {
     guard: Mutex<guard::Status>,
     /// The window's language, for texts Rust shows itself (notifications, the Explorer menu).
     lang: Mutex<String>,
+    /// Online lookup answers by hash prefix (off in this build, see lookup.rs).
+    lookup: lookup::Cache,
 }
 
 /// A plan computed for the threat screen, with the file's hash when it was made.
@@ -95,6 +98,12 @@ impl AppState {
     fn record(&self, e: Entry) {
         if let Ok(mut h) = self.history.lock() {
             let _ = h.push(e);
+        }
+    }
+    /// The online lookup for a report nothing on the machine flagged, when the user has it on.
+    fn look_up(&self, report: &mut genra_av_core::Report) {
+        if self.settings.lock().is_ok_and(|s| s.online_lookup) {
+            self.lookup.check(report);
         }
     }
     fn lang(&self) -> String {
@@ -178,6 +187,7 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
     let st = app.state::<AppState>();
     let p = st.allowed(&path)?;
     let rules = st.rules();
+    let a = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<ScanResult, String> {
         let meta = std::fs::metadata(&p).map_err(|e| format!("read: {e}"))?;
         if !meta.is_file() {
@@ -187,7 +197,8 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
             return Err("too_large".into());
         }
         let bytes = std::fs::read(&p).map_err(|e| format!("read: {e}"))?;
-        let report = quick::checked(genra_av_core::scan_named(&util::file_name(&p), &bytes, Some(&rules.pack), Some(&rules.reputation)), &p, &rules);
+        let mut report = quick::checked(genra_av_core::scan_named(&util::file_name(&p), &bytes, Some(&rules.pack), Some(&rules.reputation)), &p, &rules);
+        a.state::<AppState>().look_up(&mut report);
         Ok(ScanResult { name: util::file_name(&p), path, size: meta.len(), hash_only: quick::hash_only(&report), report })
     })
     .await
@@ -864,6 +875,28 @@ fn guard_status(st: St) -> guard::Status {
     s
 }
 
+/// The online lookup as Cài đặt shows it: hidden while this build has it off.
+#[derive(Serialize)]
+struct OnlineLookup {
+    available: bool,
+    on: bool,
+}
+
+#[tauri::command]
+fn online_lookup(st: St) -> OnlineLookup {
+    OnlineLookup { available: lookup::AVAILABLE, on: st.settings.lock().map(|s| s.online_lookup).unwrap_or(true) }
+}
+
+#[tauri::command]
+fn set_online_lookup(st: St, on: bool) -> Result<OnlineLookup, String> {
+    {
+        let mut s = st.settings.lock().map_err(|e| e.to_string())?;
+        s.online_lookup = on;
+        s.save(&st.data).map_err(|e| e.to_string())?;
+    }
+    Ok(online_lookup(st))
+}
+
 /// The "Canh gác" switch in Cài đặt.
 #[tauri::command]
 fn set_guard(st: St, on: bool) -> Result<guard::Status, String> {
@@ -1104,6 +1137,7 @@ pub fn run() {
                 guard_on: AtomicBool::new(settings.guard),
                 guard: Mutex::new(guard::Status::default()),
                 lang: Mutex::new("vi".into()),
+                lookup: lookup::Cache::default(),
                 settings: Mutex::new(settings),
                 quick_running: AtomicBool::new(false),
                 quick_stop: AtomicBool::new(false),
@@ -1197,6 +1231,8 @@ pub fn run() {
             set_guard,
             autostart,
             set_autostart,
+            online_lookup,
+            set_online_lookup,
             report_false_positive
         ])
         .build(tauri::generate_context!())

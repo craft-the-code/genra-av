@@ -139,7 +139,7 @@ pub fn folders() -> Vec<PathBuf> {
 
 /// Scans one file the way a file checked by hand is scanned (without asking Defender, which
 /// watches new files itself). `None` when it cannot be read or is too large.
-fn scan_one(path: &Path, rules: &Loaded) -> Option<ScanResult> {
+fn scan_one(app: Option<&AppHandle>, path: &Path, rules: &Loaded) -> Option<ScanResult> {
     let meta = std::fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_FILE {
         return None;
@@ -147,6 +147,10 @@ fn scan_one(path: &Path, rules: &Loaded) -> Option<ScanResult> {
     let bytes = std::fs::read(path).ok()?;
     let name = crate::util::file_name(path);
     let report = crate::quick::checked_quiet(genra_av_core::scan_named(&name, &bytes, Some(&rules.pack), Some(&rules.reputation)), path, rules);
+    let mut report = report;
+    if let Some(st) = app.and_then(|a| a.try_state::<crate::AppState>()) {
+        st.look_up(&mut report);
+    }
     let hash_only = crate::quick::hash_only(&report);
     Some(ScanResult { name, path: path.to_string_lossy().into_owned(), size: meta.len(), hash_only, report })
 }
@@ -350,7 +354,7 @@ pub fn start(app: AppHandle) {
             }
             let rules = app.state::<crate::AppState>().rules();
             for p in ready {
-                if let Some(r) = scan_one(&p, &rules).filter(is_hit) {
+                if let Some(r) = scan_one(Some(&app), &p, &rules).filter(is_hit) {
                     let place = place_of(Path::new(&r.path));
                     found(&app, r, &mut told, |_| place);
                 }
@@ -422,7 +426,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("a.docx");
         std::fs::write(&f, b"not really a docx").unwrap();
-        let r = scan_one(&f, &crate::packs::bundled()).expect("read");
+        let r = scan_one(None, &f, &crate::packs::bundled()).expect("read");
         assert!(!is_hit(&r));
         let _ = std::fs::remove_dir_all(&dir);
     }
