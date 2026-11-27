@@ -520,6 +520,9 @@ fn what_the_threat_left_on_the_machine_is_planned_around_its_quarantine() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Off Windows only: there stopping always fails, standing in for a process Windows will not stop
+/// (on Windows the made-up process id is simply gone).
+#[cfg(not(windows))]
 #[test]
 fn a_running_threat_windows_will_not_stop_is_left_for_after_a_restart_not_rolled_back() {
     let root = tmp("still-running");
@@ -529,7 +532,6 @@ fn a_running_threat_windows_will_not_stop_is_left_for_after_a_restart_not_rolled
     let plan = Plan {
         group_id: Journal::new_group_id().unwrap(),
         steps: vec![
-            // Off Windows, stopping always fails: it stands for a process Windows will not stop.
             Step { action: Action::StopProcess { pid: 999_999, started: "t".into(), path: threat.clone(), program: "svc.exe".into(), image: true }, title_vi: "a".into(), title_en: "a".into(), needs: None },
             Step { action: Action::QuarantineFile { path: threat.clone(), expected_sha256: sha }, title_vi: "b".into(), title_en: "b".into(), needs: None },
             Step { action: Action::DisableThreatStartup { id: "run:HKCU\\x|gone".into() }, title_vi: "c".into(), title_en: "c".into(), needs: None },
