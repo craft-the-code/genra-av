@@ -385,3 +385,5 @@ legend { font-size: 17px; line-height: 24px; font-weight: 700; padding: 0; margi
 .whats-new ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 19px; }
 .whats-new li + li { margin-top: 4px; }
 .modal-actions { display: flex; justify-content: space-between; gap: 12px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
+.plan-note { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; }
+.spinner.small { width: 14px; height: 14px; border-width: 2px; }

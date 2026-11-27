@@ -304,5 +304,8 @@
   "done.left": "Restart the computer",
   "done.left.detail": "Windows did not let Genra do {n} thing(s). Restart the computer, then scan once more.",
   "done.title.partial": "Mostly cleaned; restart the computer",
-  "done.text.partial": "Windows did not let Genra finish everything. Restart, then scan once more to finish."
+  "done.text.partial": "Windows did not let Genra finish everything. Restart, then scan once more to finish.",
+  "result.plan.loading": "Genra is working out exactly what to clean…",
+  "result.plan.more": "and {n} more steps",
+  "result.plan.excel": "Excel has a file open that needs cleaning: Genra will ask you to close Excel first."
 }

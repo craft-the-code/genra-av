@@ -143,6 +143,10 @@ export const rulesInfo = () => invoke<RulesInfo>("rules_info");
 export const launchPath = () => invoke<string | null>("launch_path");
 export const pickFile = () => invoke<string | null>("pick_file");
 export const scanFile = (path: string) => invoke<ScanResult>("scan_file", { path });
+/** One step "Dọn sạch giúp tôi" will take, computed before the press. */
+export interface PlanStep { title_vi: string; title_en: string }
+export interface PlanPreview { steps: PlanStep[]; summary_vi: string; summary_en: string; needs_excel: boolean }
+export const planRepair = (path: string) => invoke<PlanPreview>("plan_repair", { path });
 export const repairFile = (path: string) => invoke<RepairView>("repair_file", { path });
 export const continueRepair = (groupId: string) => invoke<RepairView>("continue_repair", { groupId });
 export const excelStatus = () => invoke<ExcelStatus>("excel_status");

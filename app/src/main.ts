@@ -79,6 +79,8 @@ const state = {
   machineNotice: null as { tone: Tone; text: string; undo?: Undo } | null,
   startupAll: false,
   repairProgress: null as api.RepairProgress | null,
+  /** The repair plan for the threat on screen, computed while the user reads (Rust plan_repair). */
+  plan: null as { path: string; status: "loading" | "ready" | "error"; preview: api.PlanPreview | null } | null,
   installId: "",
   copied: false,
   notice: null as Notice,
@@ -729,11 +731,22 @@ function threatResult(r: ScanResult): string {
   // archive, a program) has nothing to keep and is moved aside, and on a USB stick the worm's
   // other shortcuts go too and the hidden folders come back (machine/repair.rs, usb.rs).
   const office = /\.(docx?|docm|dotm?|xls[xmbt]?|xltm|xlam?|pptx?|pptm|ppsm?)$/i.test(r.name);
-  const plan = quarantineOnly
+  // The real plan once it is computed (what will be cleaned, stopped, switched off); until then,
+  // and if it cannot be computed, the general description of what the button does.
+  const pv = state.plan?.path === r.path ? state.plan : null;
+  const real = !quarantineOnly && pv?.status === "ready" && pv.preview && pv.preview.steps.length ? pv.preview : null;
+  const generic = quarantineOnly
     ? step(t("result.plan.quarantine"))
     : office
       ? step(t("result.plan.replace")) + step(t("result.plan.machine")) + step(t("result.plan.verify"))
       : step(t("result.plan.quarantine")) + step(t("result.plan.traces")) + step(t("result.plan.usb")) + step(t("result.plan.verify_any"));
+  const plan = real ? realPlan(real, step) : generic;
+  const planNote =
+    !quarantineOnly && pv?.status === "loading"
+      ? `<p class="plan-note muted caption" role="status"><span class="spinner small" aria-hidden="true"></span>${esc(t("result.plan.loading"))}</p>`
+      : real?.needs_excel
+        ? `<p class="plan-note muted caption">${esc(t("result.plan.excel"))}</p>`
+        : "";
   let status = "";
   if (working && a.what === "clean") status = progressBlock();
   if (a.s === "refused")
@@ -764,7 +777,7 @@ function threatResult(r: ScanResult): string {
       <div><h3 class="overline">${esc(t(r.report.verdict === "malware" && !r.hash_only ? "result.what" : "result.why"))}</h3>
         <ul class="bullets ${tn}">${threatBullets(r).map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div>
       ${tn === "warn" && !r.hash_only ? `<p class="flat">${esc(t("result.suspicious.advice"))}</p>` : ""}
-      ${status || `<div class="card inset plan"><h3 class="overline">${esc(t("result.plan"))}</h3><ul class="steps">${plan}</ul></div>`}
+      ${status || `<div class="card inset plan"><h3 class="overline">${esc(t("result.plan"))}</h3><ul class="steps">${plan}</ul>${planNote}</div>`}
       <div class="actions">
         ${primary}
         <button class="link" data-action="details" data-fid="details" aria-expanded="${state.details}" aria-controls="details">${esc(
@@ -780,6 +793,34 @@ function threatResult(r: ScanResult): string {
       ${reportPanel()}
     </div>
   </section>`;
+}
+
+/** Steps shown before the press; a long plan (many infected workbooks) ends with "và N bước khác". */
+const PLAN_ROWS = 6;
+function realPlan(p: api.PlanPreview, step: (txt: string) => string): string {
+  const rows = p.steps.slice(0, PLAN_ROWS).map((s) => step(tr(s.title_vi, s.title_en)));
+  const more = p.steps.length - PLAN_ROWS;
+  if (more > 0) rows.push(step(t("result.plan.more", { n: more })));
+  return rows.join("");
+}
+
+/** Computes the plan for a threat on screen; a result that is replaced meanwhile drops the answer. */
+async function loadPlan(r: ScanResult) {
+  if (r.hash_only || r.report.verdict === null || !["suspicious", "malware"].includes(r.report.verdict)) {
+    state.plan = null;
+    return;
+  }
+  state.plan = { path: r.path, status: "loading", preview: null };
+  const mine = state.plan;
+  try {
+    const preview = await api.planRepair(r.path);
+    if (state.plan !== mine) return;
+    state.plan = { path: r.path, status: "ready", preview };
+  } catch {
+    if (state.plan !== mine) return;
+    state.plan = { path: r.path, status: "error", preview: null };
+  }
+  if (state.scan.status === "done" && state.scan.result.path === r.path) render();
 }
 
 function progressBlock(): string {
@@ -1261,6 +1302,7 @@ async function scanPath(path: string) {
     const result = await api.scanFile(path);
     if (token !== scanToken) return;
     state.scan = { status: "done", result };
+    void loadPlan(result);
   } catch (e) {
     if (token !== scanToken) return;
     const detail = String(e);
@@ -1275,6 +1317,7 @@ function showResult(result: ScanResult) {
   resetResult();
   state.scan = { status: "done", result };
   state.page = "scan";
+  void loadPlan(result);
 }
 
 async function pick() {
