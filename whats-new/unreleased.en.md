@@ -1,8 +1,8 @@
 Genra responds faster, tells you what it is doing, and catches more kinds of malware.
 
-- Scans show a progress bar; "Your computer" opens faster and says what it is checking instead of staying blank.
-- A button that is working shows its own spinner; the rest of Genra stays usable.
+- Scans show a progress bar and each working button its own spinner; "Your computer" opens faster and is never left blank.
 - When a new version is out, Genra shows what is new; update now or later.
 - Genra catches more kinds of malware: inside archives, scripts, shortcuts, programs disguised as documents, older Office files.
 - Common, confirmed malware is quarantined by itself; programs with a valid digital signature always ask you first.
 - USB worm: Genra moves the fake shortcuts away and shows the hidden folders and files again; your data is untouched and it can be undone.
+- "Clean it for me" cleans the computer too: stops running malware, switches off what starts it, unlocks Task Manager; all undoable.

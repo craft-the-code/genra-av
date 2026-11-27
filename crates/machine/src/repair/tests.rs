@@ -319,7 +319,7 @@ fn machine(name: &str) -> Machine {
 }
 
 fn scope<'a>(m: &Machine, p: &'a Pack, excel: ExcelStatus) -> Scope<'a> {
-    Scope { pack: Some(p), reputation: None, xlstart_dirs: vec![m.xlstart.clone()], scan_roots: vec![m.root.join("Documents"), m.root.join("Downloads")], excel, removable: vec![] }
+    Scope { pack: Some(p), reputation: None, xlstart_dirs: vec![m.xlstart.clone()], scan_roots: vec![m.root.join("Documents"), m.root.join("Downloads")], excel, removable: vec![], persistence: Some(vec![]), processes: Some(vec![]), locks: Some(vec![]) }
 }
 
 #[test]
@@ -455,7 +455,7 @@ fn a_threat_that_is_not_an_office_file_is_quarantined_with_the_usb_worm_s_other_
     let p = pack();
     let report = genra_av_core::scan_named("Tai lieu.lnk", &std::fs::read(&a).unwrap(), Some(&p), None);
     assert!(report.verdict.is_some_and(|v| v >= genra_av_core::rules::Severity::Suspicious));
-    let mut s = Scope { pack: Some(&p), reputation: None, xlstart_dirs: vec![], scan_roots: vec![], excel: ExcelStatus::default(), removable: vec![usb.clone()] };
+    let mut s = Scope { pack: Some(&p), reputation: None, xlstart_dirs: vec![], scan_roots: vec![], excel: ExcelStatus::default(), removable: vec![usb.clone()], persistence: Some(vec![]), processes: Some(vec![]), locks: Some(vec![]) };
     let plan = plan_for_threat_in(&a, &report, &s);
     let quarantined: Vec<&PathBuf> = plan.steps.iter().filter_map(|st| if let Action::QuarantineFile { path, .. } = &st.action { Some(path) } else { None }).collect();
     assert_eq!(quarantined, [&a, &b], "the shortcut itself, then the worm's other shortcut; nothing replaced");
@@ -465,5 +465,57 @@ fn a_threat_that_is_not_an_office_file_is_quarantined_with_the_usb_worm_s_other_
     let plan = plan_for_threat_in(&a, &report, &s);
     assert_eq!(plan.steps.len(), 1);
     assert!(plan.summary_vi.contains("cách ly"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn what_the_threat_left_on_the_machine_is_planned_around_its_quarantine() {
+    let root = tmp("traces-plan");
+    let threat = root.join("AppData").join("svc").join("update.js");
+    std::fs::create_dir_all(threat.parent().unwrap()).unwrap();
+    std::fs::write(&threat, b"x").unwrap();
+    let p = pack();
+    let mut report = genra_av_core::scan_named("update.js", b"x", Some(&p), None);
+    report.verdict = Some(genra_av_core::rules::Severity::Malware);
+    let t = threat.display().to_string();
+    let persist = |id: &str, scope, kind, command: String, file: Option<PathBuf>| startup::Persist { id: id.into(), name: id.into(), scope, kind, target: None, command, file };
+    let processes = vec![
+        traces::Running { pid: 4242, started: "t0".into(), exe: Some("C:\\Windows\\System32\\wscript.exe".into()), command: format!("wscript.exe \"{t}\"") },
+        traces::Running { pid: 4243, started: "t1".into(), exe: Some("C:\\Windows\\notepad.exe".into()), command: "notepad.exe".into() },
+    ];
+    let s = Scope {
+        pack: Some(&p),
+        reputation: None,
+        xlstart_dirs: vec![],
+        scan_roots: vec![],
+        excel: ExcelStatus::default(),
+        removable: vec![],
+        persistence: Some(vec![
+            persist("run:HKCU|svc", startup::ItemScope::User, startup::PersistKind::Entry, format!("wscript.exe \"{t}\""), None),
+            persist("run:HKLM|svc", startup::ItemScope::System, startup::PersistKind::Entry, format!("wscript.exe {t}"), None),
+            persist("task:\\svc", startup::ItemScope::System, startup::PersistKind::Task { name: "\\svc".into() }, format!("wscript.exe {t} //B"), None),
+            persist("file:x", startup::ItemScope::User, startup::PersistKind::Entry, t.clone(), Some(threat.clone())),
+            persist("run:HKCU|zalo", startup::ItemScope::User, startup::PersistKind::Entry, "C:\\Zalo\\Zalo.exe".into(), None),
+        ]),
+        processes: Some(processes),
+        locks: Some(vec![(traces::LOCKS[0].0.into(), traces::LOCKS[0].1.into()), ("HKCU\\Software\\X".into(), "DisableTaskMgr".into())]),
+    };
+    let plan = plan_for_threat_in(&threat, &report, &s);
+    let kinds: Vec<String> = plan.steps.iter().map(|st| serde_json::to_value(&st.action).unwrap()["type"].as_str().unwrap().to_string()).collect();
+    assert_eq!(kinds, ["stop_process", "quarantine_file", "disable_startup_item", "disable_scheduled_task", "lift_lock"], "stop first so the file can move; {kinds:?}");
+    assert_eq!(plan.steps[0].action, Action::StopProcess { pid: 4242, started: "t0".into(), path: threat.clone(), program: "wscript.exe".into() });
+    assert_eq!(plan.steps[2].action, Action::DisableStartupItem { id: "run:HKCU|svc".into() });
+    assert!(plan.summary_vi.contains("dừng 1 chương trình") && plan.summary_vi.contains("tắt 2 mục tự chạy") && plan.summary_vi.contains("1 mục tự chạy cần quyền quản trị"), "{}", plan.summary_vi);
+
+    // A suspicious (not malware) threat: its own traces, but no machine-wide locks.
+    report.verdict = Some(genra_av_core::rules::Severity::Suspicious);
+    report.findings.retain(|f| f.severity < genra_av_core::rules::Severity::Malware);
+    let plan = plan_for_threat_in(&threat, &report, &s);
+    assert!(!plan.steps.iter().any(|st| matches!(st.action, Action::LiftLock { .. })));
+
+    // An Office document is cleaned in place: Excel holding it is never stopped.
+    let doc = root.join("bao-cao.xlsm");
+    let plan = plan_for_threat_in(&doc, &report, &s);
+    assert!(plan.steps.iter().all(|st| matches!(st.action, Action::ReplaceWithClean { .. })), "{:?}", plan.steps);
     let _ = std::fs::remove_dir_all(&root);
 }

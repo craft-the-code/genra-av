@@ -8,7 +8,7 @@
 
 use crate::journal::Journal;
 use crate::office::{self, ExcelStatus};
-use crate::{reg, sha256_hex, startup};
+use crate::{reg, sha256_hex, startup, traces};
 use anyhow::{bail, Context, Result};
 use genra_av_core::extract::{self, Kind};
 use genra_av_core::reputation::Reputation;
@@ -68,6 +68,14 @@ pub enum Action {
     DisableStartupItem { id: String },
     /// Windows: clear Hidden and System on an item a USB worm hid (its other attributes stay).
     Unhide { path: PathBuf },
+    /// Stop the threat while it runs (`path` is the threat it runs), if process `pid` is still the
+    /// one seen when the plan was made. Not undoable, and nothing to undo: nothing on disk changes.
+    StopProcess { pid: u32, started: String, path: PathBuf, program: String },
+    /// Switch off a scheduled task that runs a threat (a task this user made).
+    DisableScheduledTask { name: String },
+    /// Lift a lock malware put on a Windows tool (Task Manager, Registry Editor, Folder Options):
+    /// only the values in [`traces::LOCKS`], moved aside so undo puts them back.
+    LiftLock { key: String, name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,11 +136,27 @@ pub struct Scope<'a> {
     pub excel: ExcelStatus,
     /// Removable drives mounted now: a threat on one of them also gets the USB worm clean-up.
     pub removable: Vec<PathBuf>,
+    /// What starts with the machine; `None` reads it when a plan needs it.
+    pub persistence: Option<Vec<startup::Persist>>,
+    /// Processes running now; `None` reads them when a plan needs them.
+    pub processes: Option<Vec<traces::Running>>,
+    /// Locks switched on now (key, value name); `None` reads them when a plan needs them.
+    pub locks: Option<Vec<(String, String)>>,
 }
 
 impl<'a> Scope<'a> {
     pub fn this_machine(pack: Option<&'a Pack>, reputation: Option<&'a Reputation>) -> Scope<'a> {
-        Scope { pack, reputation, xlstart_dirs: xlstart_dirs(), scan_roots: targets::quick_targets(), excel: office::excel_status(), removable: targets::removable_volumes() }
+        Scope {
+            pack,
+            reputation,
+            xlstart_dirs: xlstart_dirs(),
+            scan_roots: targets::quick_targets(),
+            excel: office::excel_status(),
+            removable: targets::removable_volumes(),
+            persistence: None,
+            processes: None,
+            locks: None,
+        }
     }
 }
 
@@ -246,6 +270,55 @@ fn usb_steps(path: &Path, scope: &Scope, this: &Path) -> Vec<Step> {
     steps
 }
 
+/// What the threat left on the machine (ADR 0004, 4b), for a threat that goes to quarantine:
+/// steps that must come before quarantining it (stop it running, so Windows lets the file move),
+/// steps after (switch off what starts it, lift the locks), and how many startup entries need
+/// admin rights Genra does not ask for.
+struct MachineSteps {
+    before: Vec<Step>,
+    after: Vec<Step>,
+    needs_admin: usize,
+}
+
+fn machine_steps(threats: &[PathBuf], report: &Report, scope: &Scope) -> MachineSteps {
+    let mut out = MachineSteps { before: Vec::new(), after: Vec::new(), needs_admin: 0 };
+    let processes = scope.processes.clone().unwrap_or_else(traces::running);
+    for (p, path) in traces::processes_of(&processes, threats) {
+        let program = p.exe.as_deref().map(traces::base_name).unwrap_or_else(|| name_of(&path));
+        out.before.push(Step {
+            action: Action::StopProcess { pid: p.pid, started: p.started.clone(), path: path.clone(), program: program.clone() },
+            title_vi: format!("Dừng “{}” đang chạy", name_of(&path)),
+            title_en: format!("Stop “{}”, which is running", name_of(&path)),
+            needs: None,
+        });
+    }
+    let persistence = scope.persistence.clone().unwrap_or_else(startup::persistence);
+    for e in startup::pointing_at(&persistence, threats) {
+        let action = match (&e.kind, e.scope) {
+            (startup::PersistKind::Task { name }, _) => Action::DisableScheduledTask { name: name.clone() },
+            (startup::PersistKind::Entry, startup::ItemScope::User) => Action::DisableStartupItem { id: e.id.clone() },
+            (startup::PersistKind::Entry, startup::ItemScope::System) => {
+                out.needs_admin += 1;
+                continue;
+            }
+        };
+        out.after.push(Step {
+            title_vi: format!("Tắt “{}” tự chạy cùng máy", e.name),
+            title_en: format!("Stop “{}” starting with the computer", e.name),
+            action,
+            needs: None,
+        });
+    }
+    let malware = report.should_quarantine() || report.verdict == Some(Severity::Malware);
+    if malware {
+        for (key, name) in scope.locks.clone().unwrap_or_else(traces::locks_on) {
+            let Some((vi, en)) = traces::lock_label(&key, &name) else { continue };
+            out.after.push(Step { action: Action::LiftLock { key, name }, title_vi: format!("Mở lại {vi} bị khoá"), title_en: format!("Unlock {en}"), needs: None });
+        }
+    }
+    out
+}
+
 fn xlstart_step(path: &Path, excel: &ExcelStatus) -> Step {
     let name = name_of(path);
     Step {
@@ -289,10 +362,22 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
     } else {
         quarantine_step(path, &report.sha256)
     };
+    let quarantined = matches!(first.action, Action::QuarantineFile { .. });
     let mut steps = vec![first];
     let usb = usb_steps(path, scope, &this);
     let usb_counts = (usb.iter().filter(|s| matches!(s.action, Action::QuarantineFile { .. })).count(), usb.iter().filter(|s| matches!(s.action, Action::Unhide { .. })).count());
+    let mut machine = MachineSteps { before: Vec::new(), after: Vec::new(), needs_admin: 0 };
+    if quarantined {
+        let mut threats = vec![path.to_path_buf()];
+        threats.extend(usb.iter().filter_map(|s| if let Action::QuarantineFile { path, .. } = &s.action { Some(path.clone()) } else { None }));
+        machine = machine_steps(&threats, report, scope);
+    }
+    steps.splice(0..0, std::mem::take(&mut machine.before));
+    let stopped = steps.iter().filter(|s| matches!(s.action, Action::StopProcess { .. })).count();
     steps.extend(usb);
+    let startup_off = machine.after.iter().filter(|s| matches!(s.action, Action::DisableStartupItem { .. } | Action::DisableScheduledTask { .. })).count();
+    let unlocked = machine.after.len() - startup_off;
+    steps.extend(machine.after);
     let mut xlstart = usize::from(threat_in_xlstart);
     if persists_in_xlstart(report, scope.pack) {
         for dir in &scope.xlstart_dirs {
@@ -330,13 +415,25 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
         }
     }
     let files = steps.iter().filter(|s| matches!(s.action, Action::ReplaceWithClean { .. })).count();
+    let (mut extra_vi, mut extra_en) = (String::new(), String::new());
+    for (n, vi, en) in [
+        (stopped, "dừng {n} chương trình đang chạy", "stop {n} running program(s)"),
+        (startup_off, "tắt {n} mục tự chạy cùng máy", "switch off {n} startup item(s)"),
+        (unlocked, "mở lại {n} công cụ bị khoá", "unlock {n} Windows tool(s)"),
+        (machine.needs_admin, "{n} mục tự chạy cần quyền quản trị, Genra không đổi", "{n} startup item(s) need admin rights; Genra leaves them"),
+    ] {
+        if n > 0 {
+            extra_vi.push_str(&format!(" · {}", vi.replace("{n}", &n.to_string())));
+            extra_en.push_str(&format!(" · {}", en.replace("{n}", &n.to_string())));
+        }
+    }
     let (summary_vi, summary_en) = if usb_counts.1 > 0 {
         (
-            format!("Dọn USB: cất {} tệp của sâu · hiện lại {} thư mục, tệp bị giấu · không xoá gì", usb_counts.0 + 1, usb_counts.1),
-            format!("Clean the USB stick: move away {} worm file(s) · show {} hidden folder(s) and file(s) again · nothing deleted", usb_counts.0 + 1, usb_counts.1),
+            format!("Dọn USB: cất {} tệp của sâu · hiện lại {} thư mục, tệp bị giấu{extra_vi} · không xoá gì", usb_counts.0 + 1, usb_counts.1),
+            format!("Clean the USB stick: move away {} worm file(s) · show {} hidden folder(s) and file(s) again{extra_en} · nothing deleted", usb_counts.0 + 1, usb_counts.1),
         )
     } else if files == 0 && xlstart == 0 {
-        ("Cất tệp vào khu cách ly · không đụng gì khác".to_string(), "Move the file to quarantine · nothing else is touched".to_string())
+        (format!("Cất tệp vào khu cách ly{extra_vi} · không đụng gì khác"), format!("Move the file to quarantine{extra_en} · nothing else is touched"))
     } else if xlstart > 0 && files == 0 {
         ("Gỡ sâu khỏi Excel · không đụng gì khác".to_string(), "Remove the worm from Excel · nothing else is touched".to_string())
     } else if xlstart > 0 {
@@ -354,6 +451,9 @@ pub enum StepState {
     Done,
     /// Nothing to do here (already as wanted, or not applicable on this system).
     Skipped,
+    /// Not done because Windows did not allow it (admin rights, a process that resists); the
+    /// repair carries on and the step says what happens instead.
+    NotAllowed,
     Failed,
 }
 
@@ -632,6 +732,40 @@ fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
             let name = name_of(path);
             j.set_attributes(group, path, now & !mask, &format!("Hiện lại “{name}”"), &format!("Show “{name}” again"))?;
             Ok((StepState::Done, Did::Other, "Đã hiện lại, dữ liệu vẫn nguyên.".into(), "Visible again; the data is untouched.".into()))
+        }
+        // The next three never fail the repair: what they could not do is said in the step, and
+        // the threat itself still goes to quarantine.
+        Action::StopProcess { pid, started, path, .. } => Ok(match traces::stop(*pid, started, path) {
+            Ok(traces::Stopped::Stopped) => (StepState::Done, Did::Other, "Đã dừng.".into(), "Stopped.".into()),
+            Ok(traces::Stopped::Gone) => (StepState::Skipped, Did::Other, "Đã tự dừng trước đó.".into(), "It had already stopped.".into()),
+            Ok(traces::Stopped::Refused) | Err(_) => (
+                StepState::NotAllowed,
+                Did::Other,
+                "Windows không cho dừng lúc này. Sau khi khởi động lại máy, nó sẽ không chạy nữa.".into(),
+                "Windows would not stop it now. After a restart it will not run again.".into(),
+            ),
+        }),
+        Action::DisableScheduledTask { name } => {
+            let short = name.rsplit('\\').next().unwrap_or(name);
+            match j.disable_task(group, name, &format!("Tắt tác vụ hẹn giờ “{short}”"), &format!("Switch off the scheduled task “{short}”")) {
+                Ok(()) => Ok((StepState::Done, Did::Other, "Sẽ không tự chạy nữa.".into(), "It will not run on its own any more.".into())),
+                Err(_) => Ok((
+                    StepState::NotAllowed,
+                    Did::Other,
+                    "Tác vụ này cần quyền quản trị để tắt; Genra không đổi.".into(),
+                    "This task needs admin rights to switch off; Genra leaves it.".into(),
+                )),
+            }
+        }
+        Action::LiftLock { key, name } => {
+            let Some((vi, en)) = traces::lock_label(key, name) else { bail!("{key}\\{name} is not a lock Genra lifts") };
+            if !matches!(reg::get(key, name), Ok(Some(reg::RegValue::Dword(n))) if n != 0) {
+                return Ok((StepState::Skipped, Did::Other, "Đã mở sẵn.".into(), "Already unlocked.".into()));
+            }
+            match j.move_registry_value(group, key, name, &traces::lock_backup(key), &format!("Mở lại {vi}"), &format!("Unlock {en}")) {
+                Ok(()) => Ok((StepState::Done, Did::Other, format!("Bạn mở lại được {vi}."), format!("You can open {en} again."))),
+                Err(_) => Ok((StepState::NotAllowed, Did::Other, "Không mở được khoá này; Genra không đổi.".into(), "This lock could not be lifted; Genra leaves it.".into())),
+            }
         }
     }
 }

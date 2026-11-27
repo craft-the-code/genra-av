@@ -36,7 +36,7 @@ Catch and clean the common malware people get, not only Office macros, while sta
 - [ ] 1b. Graded hash reputation: trusted families quarantine, re-checked at signing, signed-file rail.
 - [x] 2. Inside archives; scripts, shortcuts, double extensions (#25); USB worm clean-up that
       unhides the real folders (#26).
-- [ ] 2b. Disinfection on the machine: startup entries, running process, Defender exclusions.
+- [x] 2b. Disinfection on the machine: stop the running threat, switch off what starts it (Run, Startup folder, scheduled tasks), lift Task Manager / Registry Editor / Folder Options locks. Defender exclusions need admin rights: open, waits for a decision on an elevated helper.
 - [ ] 3. YARA-X engine with rule sets we may redistribute.
 - [ ] 4. Windows Defender as a second opinion on suspicious files.
 - [ ] 5. Online lookup by hash prefix (k-anonymity), with the privacy policy change.

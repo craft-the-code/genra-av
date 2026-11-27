@@ -21,6 +21,7 @@ pub mod rails;
 pub mod reg;
 pub mod repair;
 pub mod startup;
+pub mod traces;
 pub mod usb;
 
 pub use journal::Journal;
