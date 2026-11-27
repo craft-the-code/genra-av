@@ -189,8 +189,8 @@ pub async fn update<F: Fetch>(data: &Path, fetch: &F, keys: &[VerifyingKey], now
             std::fs::write(staging.join(&set.file), bytes)?;
         }
         if let Some(y) = &pack.yara {
-            if !plain_name(&y.file) {
-                bail!("YARA rule file name {:?} is not a plain file name", y.file);
+            if !genra_av_core::reputation::yara_file_name_ok(&y.file) {
+                bail!("YARA rule file name {:?} is not yara-<sha12>.yar", y.file);
             }
             // The rules change about once a week while the pack changes every few hours: an
             // installed copy with the same digest is reused instead of downloaded again.

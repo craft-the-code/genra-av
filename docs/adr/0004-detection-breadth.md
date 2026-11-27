@@ -66,7 +66,8 @@ quarantine anything.
   Forge whose own licence is MIT, BSD, Apache-2.0 or the Detection Rule License). The CI checks every
   rule's licence metadata and drops the rest. Rules travel in the signed pack as source and compile on
   the client. The signing job rebuilds the rule file from the same sources itself and signs only an
-  identical file.
+  identical file. About 3 100 rules ship (tool, exploit and generic indicator rules are left out
+  for now); details and the trust chain in docs/yara-rules.md.
 - Each rule carries a severity. Only rules with a measured false-positive rate of zero on the clean
   corpus (layer 5) may be `malware`; the rest are `suspicious`.
 

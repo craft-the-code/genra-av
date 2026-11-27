@@ -15,7 +15,7 @@ grep -qvE '^([A-Za-z0-9._-]+\.bin|yara-[0-9a-f]{12}\.yar)$' "$dir/files" && { ec
 while read -r f; do gh release download rules-latest -p "$f" -D "$dir"; done < "$dir/files"
 if [ "$mode" = preview ]; then
   "$here/yara-build.sh" build "$dir" "$cli" >&2
-  "$py" -c 'import json,sys; p=json.load(open(sys.argv[1], encoding="utf-8")); y=json.load(open(sys.argv[2], encoding="utf-8")); p["yara"]={k: y[k] for k in ("file","sha256","rules","source")}; json.dump(p, open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)' "$dir/pack.json" "$dir/yara.json"
+  "$py" -c 'import json,sys; p=json.load(open(sys.argv[1], encoding="utf-8")); y=json.load(open(sys.argv[2], encoding="utf-8")); p["yara"]=y; json.dump(p, open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)' "$dir/pack.json" "$dir/yara.json"
   echo "--rules $dir/pack.json --unsigned"
 else
   echo "--rules $dir/pack.json --pubkey keys/pack-1.pub"

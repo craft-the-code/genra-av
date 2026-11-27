@@ -36,15 +36,22 @@ fi
 # Both values go into URLs and file headers: digits only for the tag, a hex commit.
 [[ "$tag" =~ ^[0-9]{8}$ ]] || { echo "odd YARA Forge tag: $tag" >&2; exit 1; }
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "odd ReversingLabs commit: $commit" >&2; exit 1; }
+# GitHub serves a fork's commits through the parent repository's URLs too: the commit must be on
+# ReversingLabs' own default branch, or anyone could get rules of their choice built here.
+branch=$(gh api repos/reversinglabs/reversinglabs-yara-rules --jq .default_branch)
+status=$(gh api "repos/reversinglabs/reversinglabs-yara-rules/compare/$commit...$branch" --jq .status)
+[ "$status" = behind ] || [ "$status" = identical ] || { echo "commit $commit is not on ReversingLabs' $branch ($status)" >&2; exit 1; }
 
 gh release download "$tag" --repo YARAHQ/yara-forge -p yara-forge-rules-core.zip -D "$work"
-unzip -q "$work/yara-forge-rules-core.zip" -d "$work/forge"
+unzip -oq "$work/yara-forge-rules-core.zip" -d "$work/forge"
 forge="$work/forge/packages/core/yara-rules-core.yar"
 test -s "$forge"
 gh api "repos/reversinglabs/reversinglabs-yara-rules/tarball/$commit" > "$work/rl.tgz"
 mkdir "$work/rl"
 tar -xzf "$work/rl.tgz" -C "$work/rl" --strip-components=1
 test -d "$work/rl/yara"
+# Links in a downloaded archive could pull in files from this runner.
+if [ -n "$(find "$work/forge" "$work/rl" -type l -print -quit)" ]; then echo "the sources hold symbolic links" >&2; exit 1; fi
 
 "$py" "$root/scripts/yara_select.py" select "$root/rules/yara-sources.json" "$root/rules/yara-disabled.json" "$work/blocks.yar" \
   --forge "$forge" --forge-tag "$tag" --rl "$work/rl/yara" --rl-commit "$commit"
@@ -56,5 +63,5 @@ if [ "$mode" = build ]; then
 else
   "$py" -c 'import json,re,sys; r=json.load(open(sys.argv[1]))["refused"]; assert all(re.fullmatch(r"[A-Za-z0-9_]+", n) for n in r); print("\n".join(r))' "$src" > "$work/refused.txt"
 fi
-"$py" "$root/scripts/yara_select.py" assemble "$work/blocks.yar" "$work/refused.txt" "$out" > "$out/yara.json"
+"$py" "$root/scripts/yara_select.py" assemble "$work/blocks.yar" "$work/refused.txt" "$root/rules/yara-malware.json" "$root/rules/licenses" "$out" > "$out/yara.json"
 cat "$out/yara.json"

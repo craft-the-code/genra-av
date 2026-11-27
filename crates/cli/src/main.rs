@@ -307,7 +307,10 @@ fn run() -> Result<bool> {
             // Strict here: a publisher must not build on a list that does not match its pack.
             let dir = pack.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
             let rep = Reputation::load(&p, dir)?;
-            eprintln!("ok: version {}, {} rules, {} hashes, signature valid", p.version, p.rules.len(), rep.entries());
+            eprintln!("ok: version {}, {} rules, {} hashes, {} YARA rules, signature valid", p.version, p.rules.len(), rep.entries(), rep.yara().map(|y| y.len()).unwrap_or(0));
+            if let Some(e) = rep.yara_error() {
+                eprintln!("warning: YARA rules not in use: {e}");
+            }
             Ok(false)
         }
     }
@@ -375,7 +378,13 @@ fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Reputation {
 
 fn describe(pack: Option<&Pack>, rep: &Reputation) {
     match pack {
-        Some(p) => eprintln!("rules: version {} ({} rules, {} known-bad hashes)", p.version, p.rules.len(), rep.entries()),
+        Some(p) => {
+            let yara = rep.yara().map(|y| y.len()).unwrap_or(0);
+            eprintln!("rules: version {} ({} rules, {} known-bad hashes, {} YARA rules)", p.version, p.rules.len(), rep.entries(), yara);
+            if let Some(e) = rep.yara_error() {
+                eprintln!("warning: YARA rules not in use ({e}); hash lists and the other checks are");
+            }
+        }
         None => eprintln!("rules: none loaded, built-in heuristics only"),
     }
 }

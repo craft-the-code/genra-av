@@ -75,7 +75,8 @@ const PROGRAM_EXT: &[&str] = &["exe", "scr", "com", "pif", "cpl", "dll", "js", "
 /// [`scan_with`] plus the checks that need the file's name: disguised names, scripts and shortcuts
 /// by type, and what is inside a plain zip (each entry scanned the same way, a few levels deep).
 pub fn scan_named(name: &str, bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputation::Reputation>) -> Report {
-    scan_named_at(name, bytes, pack, reputation, 0)
+    // One YARA time budget for the file and every archive entry inside it.
+    yara::with_budget(|| scan_named_at(name, bytes, pack, reputation, 0))
 }
 
 fn scan_named_at(name: &str, bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputation::Reputation>, depth: usize) -> Report {

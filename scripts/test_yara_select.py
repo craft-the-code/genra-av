@@ -1,14 +1,17 @@
 """Tests for scripts/yara_select.py and the YARA part of scripts/check-pack.py. Standard library only.
 
-Run: python3 -m unittest discover -s scripts -p 'test_yara*.py'
+Run: python3 -m unittest discover -s scripts -p 'test_*.py'
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 
 
 def load(name: str, file: str):
@@ -24,6 +27,10 @@ cp = load("check_pack", "check-pack.py")
 FORGE = '''import "pe"
 import "magic"
 
+/*
+ * YARA Rule Set
+ * Repository Name: ditekSHen, a header that must not land under another source's rule
+ */
 rule KEPT_A : FILE {
 \tmeta:
 \t\tlicense_url = "https://github.com/ditekshen/detection/blob/abc/LICENSE.txt"
@@ -37,6 +44,7 @@ rule DROPPED_GPL {
 \tcondition:
 \t\ttrue
 }
+/* Repository Name: signature-base */
 
 private rule KEPT_B {
 \tmeta:
@@ -51,6 +59,20 @@ rule DISABLED_ONE {
 \tcondition:
 \t\ttrue
 }
+
+rule SIGNATURE_BASE_HKTL_Mimikatz {
+\tmeta:
+\t\tlicense_url = "https://github.com/Neo23x0/signature-base/blob/abc/LICENSE"
+\tcondition:
+\t\ttrue
+}
+
+rule AMBIGUOUS {
+\tmeta:
+\t\tlicense_url = "https://github.com/Neo23x0/signature-base/blob/abc/LICENSE"
+\tcondition:
+rule\x0bsneaky
+}
 '''
 
 RL = '''import "pe"
@@ -63,6 +85,13 @@ rule KEPT_A { condition: false }
 '''
 
 
+def quiet(f, *a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        f(*a)
+    return buf.getvalue()
+
+
 class YaraSelect(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -70,47 +99,69 @@ class YaraSelect(unittest.TestCase):
         open(p("forge.yar"), "w").write(FORGE)
         os.makedirs(p("rl/windows"))
         open(p("rl/windows/demo.yara"), "w").write(RL)
-        root = os.path.dirname(HERE)
         json.dump({"rules": ["DISABLED_ONE"]}, open(p("disabled.json"), "w"))
-        ys.select([os.path.join(root, "rules/yara-sources.json"), p("disabled.json"), p("blocks.yar"), "--forge", p("forge.yar"), "--forge-tag", "20261122", "--rl", p("rl"), "--rl-commit", "c" * 40])
+        json.dump({"rules": ["Win32_Ransomware_Demo", "NOT_SHIPPED"]}, open(p("malware.json"), "w"))
+        quiet(ys.select, [os.path.join(ROOT, "rules/yara-sources.json"), p("disabled.json"), p("blocks.yar"), "--forge", p("forge.yar"), "--forge-tag", "20261122", "--rl", p("rl"), "--rl-commit", "c" * 40])
         self.p = p
 
-    def test_only_licensed_rules_and_supported_modules(self):
+    def assemble(self, refused: str, out: str) -> dict:
+        open(self.p("refused.txt"), "w").write(refused)
+        os.makedirs(out, exist_ok=True)
+        return json.loads(quiet(ys.assemble, [self.p("blocks.yar"), self.p("refused.txt"), self.p("malware.json"), os.path.join(ROOT, "rules/licenses"), out]))
+
+    def test_only_licensed_unambiguous_rules_and_supported_modules(self):
         text = open(self.p("blocks.yar")).read()
         names = [m.group(1) for m in map(ys.RULE_LINE.match, text.splitlines()) if m]
-        self.assertEqual(names, ["KEPT_A", "KEPT_B", "Win32_Ransomware_Demo"], "GPL and disabled out; RL's duplicate KEPT_A out")
+        self.assertEqual(names, ["KEPT_A", "KEPT_B", "Win32_Ransomware_Demo"], "GPL, disabled, hacking tool, ambiguous and RL's duplicate out")
         self.assertIn('import "pe"', text)
         self.assertNotIn('import "magic"', text, "a module the engine lacks would refuse every rule")
+        self.assertNotIn("Repository Name", text, "comments between rules are dropped")
 
-    def test_assemble_drops_refused_and_counts_like_the_client(self):
-        open(self.p("refused.txt"), "w").write("KEPT_B\n")
-        out = os.path.join(self.d, "out")
-        os.makedirs(out)
-        import contextlib, io
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            ys.assemble([self.p("blocks.yar"), self.p("refused.txt"), out])
-        y = json.loads(buf.getvalue())
-        self.assertEqual(y["rules"], 2)
+    def test_golden_count_matches_the_rust_reader(self):
+        golden = open(os.path.join(HERE, "testdata/yara-count.yar"), encoding="utf-8").read()
+        self.assertEqual(ys.count(golden), 6)
+
+    def test_assemble_is_deterministic_and_carries_licences_and_the_malware_list(self):
+        out, out2 = os.path.join(self.d, "out"), os.path.join(self.d, "out2")
+        y = self.assemble("", out)
+        self.assertEqual(y["rules"], 3)
+        self.assertEqual(y["malware"], ["Win32_Ransomware_Demo"], "only shipped rules, from the reviewed list")
+        self.assertEqual((y["forge_tag"], y["rl_commit"]), ("20261122", "c" * 40))
         self.assertRegex(y["file"], r"^yara-[0-9a-f]{12}\.yar$")
         body = open(os.path.join(out, y["file"]), encoding="utf-8").read()
-        self.assertNotIn("rule KEPT_B", body)
         self.assertIn("Detection Rule License", body)
-        # Deterministic: the signing job's rebuild gives the same bytes.
-        out2 = os.path.join(self.d, "out2")
-        os.makedirs(out2)
-        with contextlib.redirect_stdout(io.StringIO()):
-            ys.assemble([self.p("blocks.yar"), self.p("refused.txt"), out2])
+        self.assertIn("ESET spol. s r.o.", body)
+        self.assertEqual(y, self.assemble("", out2))
         self.assertEqual(open(os.path.join(out2, y["file"]), "rb").read(), open(os.path.join(out, y["file"]), "rb").read())
 
+    def test_refusing_a_rule_another_one_uses_fails(self):
+        with self.assertRaises(SystemExit):
+            self.assemble("KEPT_A\n", os.path.join(self.d, "o3"))
+        y = self.assemble("KEPT_B\n", os.path.join(self.d, "o4"))
+        self.assertEqual(y["rules"], 2)
+
+    def test_check_pack_yara(self):
+        out, exp = os.path.join(self.d, "out"), os.path.join(self.d, "exp")
+        y = self.assemble("", out)
+        self.assemble("", exp)
+        json.dump(y, open(os.path.join(exp, "yara.json"), "w"))
         pack = {"yara": dict(y)}
-        cp.check_yara(pack, out, out2)  # identical: passes
+        cp.check_yara(pack, out, exp)
+        for bad in [{"yara": dict(y, rules=float(y["rules"]))}, {"yara": dict(y, malware=["Other"])}, {}]:
+            with self.assertRaises(SystemExit):
+                cp.check_yara(bad, out, exp)
         with self.assertRaises(SystemExit):
             cp.check_yara(pack, out, None)
+        # Carried over unchanged from the previous signed pack: no rebuild needed.
+        cp.check_yara(pack, out, None, {"yara": dict(y)}, out)
+        with self.assertRaises(SystemExit):
+            cp.check_yara({}, out, None, {"yara": dict(y)}, out)
+        with self.assertRaises(SystemExit):
+            cp.check_yara(pack, out, exp, {"yara": dict(y, forge_tag="20991231", file="x")}, out)
         with open(os.path.join(out, y["file"]), "ab") as f:
             f.write(b"\nrule Sneaked_In { condition: true }\n")
         with self.assertRaises(SystemExit):
-            cp.check_yara(pack, out, out2)
+            cp.check_yara(pack, out, exp)
 
 
 if __name__ == "__main__":

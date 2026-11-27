@@ -80,7 +80,7 @@ def main() -> None:
         with open(os.path.join(out_dir, y["file"]), "rb") as f:
             if hashlib.sha256(f.read()).hexdigest() != y["sha256"]:
                 sys.exit("YARA file does not match yara.json")
-        pack["yara"] = {k: y[k] for k in ("file", "sha256", "rules", "source")}
+        pack["yara"] = {k: y[k] for k in ("file", "sha256", "rules", "source", "forge_tag", "rl_commit", "malware")}
     with open(os.path.join(out_dir, "pack.json"), "w", encoding="utf-8") as f:
         json.dump(pack, f, ensure_ascii=False, indent=2)
         f.write("\n")

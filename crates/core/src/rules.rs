@@ -48,6 +48,16 @@ pub struct YaraRef {
     pub rules: u64,
     /// Where the rules come from and under which licences, e.g. "YARA Forge core + ReversingLabs".
     pub source: String,
+    /// The YARA Forge release and ReversingLabs commit the file was built from (the signing job
+    /// refuses to go back to older ones).
+    #[serde(default)]
+    pub forge_tag: String,
+    #[serde(default)]
+    pub rl_commit: String,
+    /// Rules rated malware (quarantined without asking): reviewed in this repository
+    /// (rules/yara-malware.json), never read from rule text. Every other match is suspicious.
+    #[serde(default)]
+    pub malware: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

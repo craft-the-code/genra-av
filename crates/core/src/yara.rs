@@ -7,14 +7,17 @@
 //! engine sits behind this module only, so swapping it is one file.
 //!
 //! Rules travel as source in the signed pack (beside the JSON, named by its digest like the hash
-//! lists) and compile once when the pack loads. Every finding is `suspicious` unless the rule's
-//! `genra_severity` meta says `malware`, which the pack pipeline only writes for rules with no
-//! match on the clean corpus. A scan of one file stops after [`TIMEOUT`].
+//! lists) and compile once when the pack loads. Every finding is `suspicious` unless the rule is
+//! named in the signed pack's own `yara.malware` list (reviewed in this repository, never taken
+//! from rule text: upstream authors do not decide what Genra quarantines). One file, archive
+//! entries included, gets at most [`TIMEOUT`] of YARA time in all.
 
 use crate::rules::Severity;
 use crate::Finding;
 use anyhow::{bail, Result};
-use std::time::Duration;
+use std::cell::Cell;
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 /// Most time one file may take (a slow rule on a crafted file cannot hang a scan).
 pub const TIMEOUT: Duration = Duration::from_millis(1500);
@@ -26,6 +29,26 @@ pub const ENGINE: &str = "boreal-1.4";
 pub struct YaraRules {
     scanner: boreal::Scanner,
     count: usize,
+    /// Rules rated malware (from the signed pack JSON).
+    malware: HashSet<String>,
+}
+
+thread_local! {
+    /// The YARA deadline of the file being scanned, shared by its archive entries.
+    static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Runs `f` with one YARA time budget of [`TIMEOUT`] for everything it scans on this thread (a
+/// file and every entry of an archive inside it). Nested calls keep the outer deadline.
+pub fn with_budget<T>(f: impl FnOnce() -> T) -> T {
+    let outer = DEADLINE.with(|d| d.get());
+    if outer.is_some() {
+        return f();
+    }
+    DEADLINE.with(|d| d.set(Some(Instant::now() + TIMEOUT)));
+    let r = f();
+    DEADLINE.with(|d| d.set(None));
+    r
 }
 
 impl std::fmt::Debug for YaraRules {
@@ -39,36 +62,41 @@ pub fn count_rules(source: &str) -> usize {
     source.lines().filter(|l| rule_name(l).is_some()).count()
 }
 
-/// The name declared on a line `[private|global] rule NAME [: tags] [{]`, if it is one.
+/// The name declared on a line `[private|global] rule NAME[ :{...]`, if it is one. One ASCII
+/// grammar, the same as scripts/yara_select.py's: at the start of the line, words separated by
+/// spaces or tabs only, the name made of `[A-Za-z0-9_]` and ended by anything else.
 fn rule_name(line: &str) -> Option<&str> {
-    // At the start of the line only, as scripts/yara_select.py counts them.
-    if line.starts_with(char::is_whitespace) {
-        return None;
+    let mut rest = line;
+    loop {
+        let end = rest.find([' ', '\t'])?;
+        let (word, tail) = (&rest[..end], rest[end..].trim_start_matches([' ', '\t']));
+        match word {
+            "private" | "global" => rest = tail,
+            "rule" => {
+                let n = tail.bytes().position(|b| !(b.is_ascii_alphanumeric() || b == b'_')).unwrap_or(tail.len());
+                return (n > 0).then(|| &tail[..n]);
+            }
+            _ => return None,
+        }
     }
-    let mut w = line.split_whitespace();
-    let mut t = w.next()?;
-    while t == "private" || t == "global" {
-        t = w.next()?;
-    }
-    if t != "rule" {
-        return None;
-    }
-    let t = w.next()?;
-    let end = t.bytes().position(|b| !(b.is_ascii_alphanumeric() || b == b'_')).unwrap_or(t.len());
-    (end > 0).then(|| &t[..end])
 }
 
 impl YaraRules {
     /// Compiles a whole rule file. The pack pipeline has already compiled every rule on its own
     /// with this engine, so any error here means a damaged or mismatched file: it is refused.
     pub fn compile(source: &str) -> Result<YaraRules> {
+        Self::compile_with(source, HashSet::new())
+    }
+
+    /// [`compile`](Self::compile), with the rules the signed pack rates malware.
+    pub fn compile_with(source: &str, malware: HashSet<String>) -> Result<YaraRules> {
         let mut c = boreal::Compiler::new();
         if let Err(e) = c.add_rules_str(source) {
             bail!("YARA rules do not compile: {e:?}");
         }
         let mut scanner = c.finalize();
         scanner.set_scan_params(boreal::scanner::ScanParams::default().timeout_duration(Some(TIMEOUT)).string_max_nb_matches(100));
-        Ok(YaraRules { scanner, count: count_rules(source) })
+        Ok(YaraRules { scanner, count: count_rules(source), malware })
     }
 
     pub fn len(&self) -> usize {
@@ -85,20 +113,21 @@ impl YaraRules {
         if bytes.is_empty() || bytes.len() > MAX_BYTES {
             return Vec::new();
         }
-        let result = match self.scanner.scan_mem(bytes) {
+        let left = DEADLINE.with(|d| d.get()).map(|t| t.saturating_duration_since(Instant::now())).unwrap_or(TIMEOUT).min(TIMEOUT);
+        if left.is_zero() {
+            return Vec::new();
+        }
+        let mut scanner = self.scanner.clone();
+        scanner.set_scan_params(scanner.scan_params().clone().timeout_duration(Some(left)));
+        let result = match scanner.scan_mem(bytes) {
             Ok(r) => r,
             Err((_, partial)) => partial,
         };
         let mut out = Vec::new();
         for r in result.rules.iter().filter(|r| r.matched) {
-            let meta = |key: &str| {
-                r.metadatas.iter().find(|m| self.scanner.get_string_symbol(m.name) == key).and_then(|m| match m.value {
-                    boreal::MetadataValue::Bytes(b) => Some(String::from_utf8_lossy(self.scanner.get_bytes_symbol(b)).into_owned()),
-                    _ => None,
-                })
-            };
-            let severity = if meta("genra_severity").as_deref() == Some("malware") { Severity::Malware } else { Severity::Suspicious };
-            let family = meta("malware_family").or_else(|| meta("malware")).or_else(|| meta("family")).filter(|f| !f.trim().is_empty()).unwrap_or_else(|| family_from_name(r.name));
+            let severity = if self.malware.contains(r.name) { Severity::Malware } else { Severity::Suspicious };
+            // From the rule name only: meta text is the upstream author's, shown to nobody.
+            let family = family_from_name(r.name);
             out.push(Finding {
                 rule: format!("yara.{}", r.name),
                 severity,
@@ -199,7 +228,6 @@ rule DITEKSHEN_MALWARE_Win_DemoStealer : FILE {
 private rule helper { condition: filesize < 10 }
 rule SIGNATURE_BASE_Demo_Confirmed {
     meta:
-        malware_family = "DemoFamily"
         genra_severity = "malware"
     strings:
         $b = { 47 45 4E 52 41 2D 42 41 44 }
@@ -209,8 +237,27 @@ rule SIGNATURE_BASE_Demo_Confirmed {
 "#;
 
     #[test]
-    fn matches_become_findings() {
+    fn counts_like_the_python_pipeline() {
+        // The same golden file the Python tests count (scripts/test_yara_select.py).
+        let golden = include_str!("../../../scripts/testdata/yara-count.yar");
+        let names: Vec<&str> = golden.lines().filter_map(rule_name).collect();
+        assert_eq!(names, ["A", "B", "C", "Caf", "D_1", "E"]);
+    }
+
+    #[test]
+    fn the_time_budget_is_shared_by_one_file() {
         let y = YaraRules::compile(RULES).unwrap();
+        with_budget(|| {
+            DEADLINE.with(|d| d.set(Some(Instant::now())));
+            assert!(y.findings(b"xx genra-demo-stealer-marker yy").is_empty(), "no time left: no YARA");
+        });
+        assert!(DEADLINE.with(|d| d.get()).is_none());
+        assert_eq!(y.findings(b"xx genra-demo-stealer-marker yy").len(), 1);
+    }
+
+    #[test]
+    fn matches_become_findings() {
+        let y = YaraRules::compile_with(RULES, HashSet::from(["SIGNATURE_BASE_Demo_Confirmed".to_string()])).unwrap();
         assert_eq!(y.len(), 3);
         assert!(y.findings(b"nothing here").is_empty());
         let f = y.findings(b"xx genra-demo-stealer-marker yy");
@@ -220,7 +267,10 @@ rule SIGNATURE_BASE_Demo_Confirmed {
         assert_eq!(f[0].severity, Severity::Suspicious);
         assert!(!f[0].auto_quarantine, "suspicious never moves a file on its own");
         let f = y.findings(b"..GENRA-BAD..");
-        assert_eq!((f[0].family.as_str(), f[0].severity, f[0].auto_quarantine), ("DemoFamily", Severity::Malware, true));
+        assert_eq!((f[0].family.as_str(), f[0].severity, f[0].auto_quarantine), ("Demo Confirmed", Severity::Malware, true), "malware because the pack lists it");
+        // Rule text cannot rate itself malware.
+        let plain = YaraRules::compile(RULES).unwrap();
+        assert_eq!(plain.findings(b"..GENRA-BAD..")[0].severity, Severity::Suspicious);
     }
 
     #[test]
