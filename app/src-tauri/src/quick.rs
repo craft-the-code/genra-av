@@ -13,11 +13,15 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const PERMISSION_WAIT: Duration = Duration::from_secs(3);
+/// Most files one scan sends to Defender (each takes a few seconds); the rest keep Genra's own
+/// verdict and are asked about when the user opens them.
+const DEFENDER_MAX: usize = 20;
 const EMIT_EVERY: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
-    /// `walking`, or `waiting` while a folder read is blocked (permission prompt).
+    /// `walking`, `waiting` while a folder read is blocked (permission prompt), or `defender`
+    /// while Windows Defender is asked about a suspicious file (`folder` is then that file).
     pub phase: &'static str,
     pub folder: String,
     pub files: u64,
@@ -60,10 +64,17 @@ pub fn hash_only(r: &genra_av_core::Report) -> bool {
 }
 
 /// The report as the app acts on it: scanned, then the safety rails (a validly signed program is
-/// never quarantined on a hash match alone).
-pub fn checked(mut report: genra_av_core::Report, path: &Path) -> genra_av_core::Report {
+/// never quarantined on a hash match alone), then Windows Defender's opinion when Genra calls
+/// the file suspicious (ADR 0004, layer 4).
+pub fn checked(report: genra_av_core::Report, path: &Path, rules: &Loaded) -> genra_av_core::Report {
+    checked_with(report, path, rules, true).0
+}
+
+/// [`checked`], asking Defender only when `defender` is true. Also says whether Defender ran.
+fn checked_with(mut report: genra_av_core::Report, path: &Path, rules: &Loaded, defender: bool) -> (genra_av_core::Report, bool) {
     genra_av_machine::rails::signed_file_rail(&mut report, path);
-    report
+    let ran = defender && genra_av_machine::defender::second_opinion(&mut report, path, &rules.pack.disabled);
+    (report, ran)
 }
 
 /// What to walk and how: the folders, their depth and skips, and the stop flag.
@@ -104,12 +115,18 @@ pub fn run_job(data: &Path, rules: &Loaded, job: &Job, emit: impl Fn(Progress)) 
     }
     let _ = std::fs::create_dir_all(data);
     let _ = ctx.cache.save(&cache_path);
+    let mut asked = 0;
     let hits = total
         .hits
         .into_iter()
         .map(|h| {
             let size = std::fs::metadata(&h.path).map(|m| m.len()).unwrap_or(0);
-            let report = checked(h.report, &h.path);
+            let ask = asked < DEFENDER_MAX;
+            if ask && genra_av_machine::defender::wants(&h.report, &h.path) && cfg!(windows) {
+                emit(Progress { phase: "defender", folder: h.path.to_string_lossy().into_owned(), files: seen });
+            }
+            let (report, ran) = checked_with(h.report, &h.path, rules, ask);
+            asked += usize::from(ran);
             let hash_only = hash_only(&report);
             ScanResult { name: crate::util::file_name(&h.path), path: h.path.to_string_lossy().into_owned(), size, hash_only, report }
         })

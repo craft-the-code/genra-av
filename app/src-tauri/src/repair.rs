@@ -71,7 +71,8 @@ pub fn family_of(r: &Report) -> String {
 /// that the cleaner can make a macro-free copy of it.
 pub fn precheck(rules: &Loaded, path: &Path) -> std::result::Result<Report, Failure> {
     let bytes = read_checked(path).map_err(|e| Failure::failed("read", e))?;
-    let report = scan_named(&crate::util::file_name(path), &bytes, Some(&rules.pack), Some(&rules.reputation));
+    // As the result screen showed it (Defender's answer is remembered for the session).
+    let report = crate::quick::checked(scan_named(&crate::util::file_name(path), &bytes, Some(&rules.pack), Some(&rules.reputation)), path, rules);
     if report.verdict.is_none_or(|v| v < genra_av_core::rules::Severity::Suspicious) {
         return Err(Failure::failed("nothing_to_clean", "the file has no finding to clean"));
     }
