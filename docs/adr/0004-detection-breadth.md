@@ -4,7 +4,7 @@ Status: **accepted** 27/11/2026 (Hoan chose option B over hash-only (A) and bund
 
 ## Context
 
-Genra AV today is strong on one thing: Office documents with VBA or Excel 4.0 macros, remote templates,
+Genra AV is strong on one thing (with #20): Office documents with VBA or Excel 4.0 macros, remote templates,
 and cleaning them without losing data. Anything else (a stealer `.exe` in Downloads, a `.js` dropper
 inside a `.zip` from Zalo, a `.lnk` on a USB stick that starts PowerShell) is only caught when its
 exact SHA-256 is on the MalwareBazaar list, and even then it is "suspicious", never moved aside
@@ -31,16 +31,25 @@ quarantine anything.
 
 - Keep MalwareBazaar, and add abuse.ch's other payload feeds (URLhaus payloads, ThreatFox SHA-256
   IOCs). All are free with the key we already have.
-- **Grade instead of trusting a feed as a whole.** A hash is `trusted` (may quarantine) only when its
-  MalwareBazaar entry names a family on a curated list of commodity families (AgentTesla, Formbook,
-  Remcos, AsyncRAT, RedLine, Lumma, Emotet, QakBot, njRAT, …, kept in `rules/families.json`).
-  Everything else stays `suspicious`. The CI writes two lists: `trusted-<v>.bin` and `feeds-<v>.bin`.
+- **Grade instead of trusting a feed as a whole.** The family name on a MalwareBazaar entry is set by
+  whoever submitted it, so it is not enough on its own: one mislabelled popular clean file would be
+  quarantined on every PC. A hash is `trusted` (may quarantine) only when **all** of these hold:
+  - its entry names a family on a curated list of commodity families (AgentTesla, Formbook, Remcos,
+    AsyncRAT, RedLine, Lumma, Emotet, QakBot, njRAT, …, kept in `rules/families.json`);
+  - independent engines agree: MalwareBazaar's vendor results show detections by at least 3 engines;
+  - it has been listed for at least 48 hours without being removed or reported as a false positive.
+  Everything else stays `suspicious`. The CI writes two lists: `trusted-<v>.bin` and `feeds-<v>.bin`,
+  and the signing job recomputes the trusted list from the same inputs with the code on `main`
+  instead of taking the build job's word for it. On the client, the safety rails below still apply:
+  a file signed by Microsoft or an allow-listed publisher is never quarantined on hash evidence alone.
 - **Size**: the pack carries the last 90 days (tens of thousands of hashes, about 1–3 MB). Older
   hashes go to an online lookup (below) instead of every PC.
-- **Online lookup, privacy-preserving**: the app sends only the first 5 hex characters of a file's
-  SHA-256 to `genra-api` and gets back every known-bad hash with that prefix (the k-anonymity model
-  "Have I Been Pwned" uses). The server never learns which file was checked. **Off by default today;
-  this ADR asks whether it should be on by default** (open question 1).
+- **Online lookup by hash prefix**: the app sends only the first 5 hex characters (20 bits) of a
+  file's SHA-256 to `genra-api` and gets back every known-bad hash with that prefix (the k-anonymity
+  model "Have I Been Pwned" uses); the match is made on the PC. What leaks, stated plainly: the
+  prefix narrows the file to one of about a million buckets, and the request carries the PC's IP
+  address. The server keeps no request log with IP addresses or prefixes beyond rate limiting.
+  On by default (decided below).
 
 ### 2. YARA-X rules for families
 
@@ -68,7 +77,9 @@ quarantine anything.
 - For executables and scripts that layers 1–3 call suspicious, ask Defender: `MpCmdRun.exe -Scan
   -ScanType 3 -File <path> -DisableRemediation`. A Defender detection upgrades the finding to
   `malware`; Defender's own name for it is shown.
-- Only when Defender is on (health check already reads that). Never sends the file anywhere itself.
+- Only when Defender is on (health check already reads that). Genra sends nothing itself, but
+  Defender follows its own settings: with "automatic sample submission" on (the Windows default),
+  Defender may upload a suspicious file to Microsoft. The privacy policy says so.
 
 ### What quarantines, what asks
 
@@ -153,7 +164,9 @@ Each step is its own PR with the detection report before and after.
 ## Decided with Hoan (27/11)
 
 1. **Online lookup**: on by default, described in the privacy policy, can be turned off in Settings.
-   The policy wording changes from "sends nothing" to "never sends your files or anything that
-   identifies them". Ships last (step 5), with the policy change in the same release.
+   The policy changes from "sends nothing" to what is true: "never sends your files; to check a file
+   it sends the first 5 characters of its fingerprint, shared by about one file in a million".
+   Ships last (step 5), with the policy change in the same release.
 2. **Suspicious items**: ask once, "Cách ly" is the main button. Malware is quarantined without asking.
-3. **Defender second opinion**: yes, only when Defender is on.
+3. **Defender second opinion**: yes, only when Defender is on; the privacy policy mentions Defender's
+   own sample submission.
