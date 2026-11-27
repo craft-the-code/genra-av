@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compose the unsigned rule pack JSON from the hand-written rules and a built hash list.
 
-Usage: build-pack.py <rules/base.json> <feed.bin> <trusted.bin> <prev-version> <out-dir>
+Usage: build-pack.py <rules/base.json> <feed.bin> <trusted.bin> <prev-version> <out-dir> [<yara.json>]
 
 - version = max(previous published version + 1, UTC time as YYYYMMDDHH, base.json's version),
   so it only grows (clients refuse an older pack, or the same version with other bytes).
@@ -14,6 +14,8 @@ Usage: build-pack.py <rules/base.json> <feed.bin> <trusted.bin> <prev-version> <
 - The trusted list (scripts/hash_grade.py: listed family, corroborated by other engines, 48 hours
   old) is `malware` and `trusted`, copied to trusted-<version>.bin and listed first, so a hash on
   both lists is looked up as trusted. An empty trusted list is left out.
+- YARA rules: <yara.json> (from scripts/yara-build.sh, the file already in <out-dir>) is named in
+  the pack as `yara`; the signing job rebuilds the file itself and compares.
 Writes <out-dir>/pack.json and prints the version.
 """
 import datetime
@@ -28,6 +30,7 @@ EXPIRY_DAYS = 14
 
 def main() -> None:
     rules_path, hashes_path, trusted_path, prev_version, out_dir = sys.argv[1:6]
+    yara_path = sys.argv[6] if len(sys.argv) > 6 else None
     with open(rules_path, encoding="utf-8") as f:
         pack = json.load(f)
     with open(hashes_path, "rb") as f:
@@ -71,6 +74,13 @@ def main() -> None:
         }
     )
     pack["hash_sets"] = sets
+    if yara_path:
+        with open(yara_path, encoding="utf-8") as f:
+            y = json.load(f)
+        with open(os.path.join(out_dir, y["file"]), "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() != y["sha256"]:
+                sys.exit("YARA file does not match yara.json")
+        pack["yara"] = {k: y[k] for k in ("file", "sha256", "rules", "source")}
     with open(os.path.join(out_dir, "pack.json"), "w", encoding="utf-8") as f:
         json.dump(pack, f, ensure_ascii=False, indent=2)
         f.write("\n")

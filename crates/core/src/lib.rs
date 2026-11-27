@@ -11,6 +11,7 @@ pub mod reputation;
 pub mod rules;
 pub mod scanner;
 pub mod targets;
+pub mod yara;
 
 use extract::{Kind, VbaModule};
 use rules::{Pack, Severity};
@@ -171,6 +172,10 @@ pub fn scan_with(bytes: &[u8], pack: Option<&Pack>, reputation: Option<&reputati
         });
     }
     findings.extend(builtin(&facts));
+    if let Some(y) = reputation.and_then(|r| r.yara()) {
+        let off = |id: &str| pack.is_some_and(|p| p.disabled.iter().any(|d| d == id));
+        findings.extend(y.findings(bytes).into_iter().filter(|f| !off(&f.rule)));
+    }
 
     let allowed = pack.is_some_and(|p| p.allow_sha256.iter().any(|h| h.eq_ignore_ascii_case(&sha256)));
     if allowed {

@@ -72,6 +72,9 @@ enum Cmd {
     /// Hash list tooling for whoever publishes packs.
     #[command(subcommand)]
     Hashes(HashesCmd),
+    /// YARA rule tooling for whoever publishes packs.
+    #[command(subcommand)]
+    Yara(YaraCmd),
     /// Clean the machine, not just the file: health, startup items, repair plans, journal, undo.
     #[command(subcommand)]
     Machine(machine::MachineCmd),
@@ -91,6 +94,14 @@ enum HashesCmd {
     Build { input: PathBuf, out: PathBuf },
     /// Binary list -> one hex SHA-256 per line on stdout (the CI merges a verified previous list this way).
     Dump { input: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum YaraCmd {
+    /// Compile rule blocks (separated by a `// @genra-rule` line, imports before the first one)
+    /// one by one with Genra's engine, in order, and print the names of those it refuses, one per
+    /// line. A rule that needs a refused one is refused too. Then compiles the kept set whole.
+    Check { input: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -215,6 +226,15 @@ fn run() -> Result<bool> {
                 writeln!(out, "{}", hex::encode(d))?;
             }
             out.flush()?;
+            Ok(false)
+        }
+        Cmd::Yara(YaraCmd::Check { input }) => {
+            let text = std::fs::read_to_string(&input).with_context(|| format!("reading {}", input.display()))?;
+            let (refused, kept) = genra_av_core::yara::check_blocks(&text);
+            for name in &refused {
+                println!("{name}");
+            }
+            eprintln!("{} rules kept, {} refused", kept, refused.len());
             Ok(false)
         }
         Cmd::Hashes(HashesCmd::Build { input, out }) => {
@@ -344,7 +364,7 @@ fn data_dir() -> Result<PathBuf> {
 /// stop the scan: it warns and goes on with rules and heuristics only.
 fn load_reputation(pack: Option<&Pack>, rules: Option<&Path>) -> Reputation {
     let loaded = match (pack, rules.and_then(|r| r.parent())) {
-        (Some(p), Some(dir)) if !p.hash_sets.is_empty() => Reputation::load(p, if dir.as_os_str().is_empty() { Path::new(".") } else { dir }),
+        (Some(p), Some(dir)) if !p.hash_sets.is_empty() || p.yara.is_some() => Reputation::load(p, if dir.as_os_str().is_empty() { Path::new(".") } else { dir }),
         _ => Ok(Reputation::default()),
     };
     loaded.unwrap_or_else(|e| {

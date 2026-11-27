@@ -1,0 +1,4 @@
+{
+  "_comment": "YARA rules switched off: matches on clean files (detection report, clean corpus) or reports from users. Names as in the rule file.",
+  "rules": []
+}

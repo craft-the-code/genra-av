@@ -11,6 +11,11 @@
 #   `suspicious` list, the version must grow and the count must not shrink. Then it signs with
 #   openssl, verifies against keys/pack-1.pub, and publishes the hash list first, the pack JSON
 #   next and the signature last.
+# - YARA rules (ADR 0004, layer 2): the build job picks the licensed rules from the newest YARA
+#   Forge release and ReversingLabs' repository and asks Genra's engine which it refuses. The
+#   signing job downloads the same release and commit itself, rebuilds the file with the standard
+#   library (taking from the build only the refused names, which can only remove rules) and
+#   refuses the pack unless the two files are identical.
 name: rule-pack
 
 on:
@@ -54,6 +59,11 @@ jobs:
             python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]' > prev.lists
             grep -qvE '^[A-Za-z0-9._-]+\.bin$' prev.lists && { echo "odd hash list name"; exit 1; }
             while read -r f; do gh release download rules-latest -p "$f" -D prev; done < prev.lists
+            yar=$(python3 -c 'import json; print((json.load(open("prev/pack.json")).get("yara") or {}).get("file", ""))')
+            if [ -n "$yar" ]; then
+              [[ "$yar" =~ ^yara-[0-9a-f]{12}\.yar$ ]] || { echo "odd YARA file name"; exit 1; }
+              gh release download rules-latest -p "$yar" -D prev
+            fi
             # Signature again, plus each list against the digest and count in the signed pack.
             ./target/release/genra-av rules verify prev/pack.json --pubkey keys/pack-1.pub --any-expiry
             # Feed lists and the trusted list are kept apart: only graded hashes may be trusted.
@@ -98,6 +108,9 @@ jobs:
           python3 scripts/hash_grade.py promote rules/families.json grade-state.json prev-trusted.txt trusted.txt
           ./target/release/genra-av hashes build trusted.txt trusted.bin
 
+      - name: YARA rules (licensed sets, checked by Genra's engine)
+        run: scripts/yara-build.sh build out ./target/release/genra-av
+
       - name: Merge and build the unsigned pack
         run: |
           sort -u prev.txt recent.txt > merged.txt
@@ -106,7 +119,7 @@ jobs:
           echo "total: $total hashes (previous $prev)"
           [ "$total" -ge "$prev" ] || { echo "the list would shrink"; exit 1; }
           ./target/release/genra-av hashes build merged.txt merged.bin
-          echo "version $(python3 scripts/build-pack.py rules/base.json merged.bin trusted.bin "$(cat prev.version)" out)"
+          echo "version $(python3 scripts/build-pack.py rules/base.json merged.bin trusted.bin "$(cat prev.version)" out out/yara.json)"
           cp grade-state.json out/grade-state.json
           ./target/release/genra-av scan --rules out/pack.json --unsigned README.md
 
@@ -139,6 +152,11 @@ jobs:
           name: unsigned-pack
           path: out
 
+      - name: Rebuild the YARA rules from their sources
+        run: |
+          mkdir yara-expected
+          scripts/yara-build.sh reproduce yara-expected out/yara-source.json
+
       - name: Check the unsigned pack against base.json and the previous pack
         run: |
           mkdir -p prev
@@ -150,9 +168,9 @@ jobs:
             python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]' > prev.lists
             grep -qvE '^[A-Za-z0-9._-]+\.bin$' prev.lists && { echo "odd hash list name"; exit 1; }
             while read -r f; do gh release download rules-latest -p "$f" -D prev; done < prev.lists
-            python3 scripts/check-pack.py rules/base.json out/pack.json prev/pack.json --additions additions.txt
+            python3 scripts/check-pack.py rules/base.json out/pack.json prev/pack.json --additions additions.txt --yara-expected yara-expected
           elif grep -q "release not found" <<<"$view"; then
-            python3 scripts/check-pack.py rules/base.json out/pack.json --additions additions.txt
+            python3 scripts/check-pack.py rules/base.json out/pack.json --additions additions.txt --yara-expected yara-expected
           else
             echo "$view"
             exit 1
@@ -173,9 +191,10 @@ jobs:
         run: |
           bin=$(python3 -c 'import json; print([s["file"] for s in json.load(open("out/pack.json"))["hash_sets"] if not s.get("trusted")][0])')
           tbin=$(python3 -c 'import json; print("".join(s["file"] for s in json.load(open("out/pack.json"))["hash_sets"] if s.get("trusted")))')
+          yar=$(python3 -c 'import json; print((json.load(open("out/pack.json")).get("yara") or {}).get("file", ""))')
           keep=""
           if [ -f prev/pack.json ]; then
-            keep=$(python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]')
+            keep=$(python3 -c 'import json; p=json.load(open("prev/pack.json")); [print(s["file"]) for s in p.get("hash_sets", [])]; print((p.get("yara") or {}).get("file", ""))')
           fi
           gh release view rules-latest >/dev/null 2>&1 ||
             gh release create rules-latest --prerelease --title "Rule pack (rolling)" \
@@ -186,6 +205,7 @@ jobs:
           # previous pack.
           gh release upload rules-latest --clobber "out/$bin"
           if [ -n "$tbin" ]; then gh release upload rules-latest --clobber "out/$tbin"; fi
+          if [ -n "$yar" ]; then gh release upload rules-latest --clobber "out/$yar"; fi
           gh release upload rules-latest --clobber out/pack.json
           gh release upload rules-latest --clobber out/pack.json.sig
           # Grading hints for the next run (unsigned; clients never read it).
@@ -193,8 +213,8 @@ jobs:
           # Keep the new list and the previous one (clients mid-download); drop older lists.
           gh release view rules-latest --json assets -q '.assets[].name' | while read -r name; do
             case "$name" in
-              malwarebazaar*.bin | malwarebazaar*.txt.gz | trusted-*.bin)
-                if [ "$name" != "$bin" ] && [ "$name" != "$tbin" ] && ! grep -qxF "$name" <<<"$keep"; then
+              malwarebazaar*.bin | malwarebazaar*.txt.gz | trusted-*.bin | yara-*.yar)
+                if [ "$name" != "$bin" ] && [ "$name" != "$tbin" ] && [ "$name" != "$yar" ] && ! grep -qxF "$name" <<<"$keep"; then
                   gh release delete-asset rules-latest "$name" -y
                 fi
                 ;;

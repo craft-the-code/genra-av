@@ -37,7 +37,7 @@ Catch and clean the common malware people get, not only Office macros, while sta
 - [x] 2. Inside archives; scripts, shortcuts, double extensions (#25); USB worm clean-up that
       unhides the real folders (#26).
 - [x] 2b. Disinfection on the machine: stop the running threat, switch off what starts it (Run, Startup folder, scheduled tasks), lift Task Manager / Registry Editor / Folder Options locks. Defender exclusions need admin rights: open, waits for a decision on an elevated helper.
-- [ ] 3. YARA-X engine with rule sets we may redistribute.
+- [x] 3. YARA rules for families (boreal engine; ~4 100 rules from licensed sets, rebuilt and re-checked at signing; all suspicious until the clean corpus clears a rule).
 - [ ] 4. Windows Defender as a second opinion on suspicious files.
 - [ ] 5. Online lookup by hash prefix (k-anonymity), with the privacy policy change.
 

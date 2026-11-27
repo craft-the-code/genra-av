@@ -188,7 +188,20 @@ pub async fn update<F: Fetch>(data: &Path, fetch: &F, keys: &[VerifyingKey], now
             let bytes = fetch.get(&set.file, MAX_LIST).await?;
             std::fs::write(staging.join(&set.file), bytes)?;
         }
-        // Checks every list's SHA-256 and count against the signed pack.
+        if let Some(y) = &pack.yara {
+            if !plain_name(&y.file) {
+                bail!("YARA rule file name {:?} is not a plain file name", y.file);
+            }
+            // The rules change about once a week while the pack changes every few hours: an
+            // installed copy with the same digest is reused instead of downloaded again.
+            let have = std::fs::read(current.join(&y.file)).ok().filter(|b| hex::encode(Sha256::digest(b)).eq_ignore_ascii_case(&y.sha256));
+            let bytes = match have {
+                Some(b) => b,
+                None => fetch.get(&y.file, MAX_LIST).await?,
+            };
+            std::fs::write(staging.join(&y.file), bytes)?;
+        }
+        // Checks every list's (and the YARA rules') SHA-256 and count against the signed pack.
         Reputation::load(&pack, &staging)?;
         std::fs::write(staging.join("pack.json"), &json)?;
         std::fs::write(staging.join("pack.json.sig"), sig.as_bytes())?;

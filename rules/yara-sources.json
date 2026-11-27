@@ -1,0 +1,16 @@
+{
+  "_comment": "Rule sets Genra may redistribute (checked 27/11/2026). A Forge rule is kept only when its license_url starts with one of these. Add a source only after reading its licence; GPL and unlicensed sets stay out.",
+  "forge": [
+    { "name": "signature-base", "match": "https://github.com/Neo23x0/signature-base/", "spdx": "DRL-1.1" },
+    { "name": "SEKOIA", "match": "https://github.com/SEKOIA-IO/Community/", "spdx": "DRL-1.1" },
+    { "name": "ditekSHen", "match": "https://github.com/ditekshen/detection/", "spdx": "BSD-2-Clause" },
+    { "name": "Mandiant", "match": "https://github.com/mandiant/red_team_tool_countermeasures/", "spdx": "BSD-2-Clause" },
+    { "name": "Volexity", "match": "https://github.com/volexity/threat-intel/", "spdx": "BSD-2-Clause" },
+    { "name": "Google GCTI", "match": "https://github.com/chronicle/GCTI/", "spdx": "Apache-2.0" },
+    { "name": "ESET", "match": "https://github.com/eset/malware-ioc/", "spdx": "BSD-2-Clause" },
+    { "name": "Trellix ARC", "match": "https://github.com/advanced-threat-research/Yara-Rules/", "spdx": "Apache-2.0" },
+    { "name": "WithSecure", "match": "https://github.com/WithSecureLabs/iocs/", "spdx": "BSD-2-Clause" },
+    { "name": "elceef", "match": "https://github.com/elceef/yara-rulz/", "spdx": "MIT" }
+  ],
+  "reversinglabs": { "name": "ReversingLabs", "repo": "reversinglabs/reversinglabs-yara-rules", "path": "yara", "spdx": "MIT" }
+}

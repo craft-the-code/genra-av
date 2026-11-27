@@ -63,6 +63,8 @@ impl HashList {
 pub struct Reputation {
     lists: Vec<(HashSetRef, HashList)>,
     fingerprint: String,
+    /// The pack's YARA rules, compiled (they ship beside the pack like the lists).
+    yara: Option<crate::yara::YaraRules>,
 }
 
 /// Identifies a set of lists by their content and how a match is treated, so the scan cache can
@@ -96,12 +98,46 @@ impl Reputation {
             }
             lists.push((r.clone(), list));
         }
-        Ok(Reputation::from_lists(lists))
+        let mut rep = Reputation::from_lists(lists);
+        if let Some(y) = &pack.yara {
+            if y.file.contains('/') || y.file.contains('\\') || y.file.starts_with('.') {
+                bail!("YARA rule file name {:?} must be a plain file name", y.file);
+            }
+            let bytes = std::fs::read(dir.join(&y.file)).with_context(|| format!("reading YARA rules {}", y.file))?;
+            let actual = hex::encode(Sha256::digest(&bytes));
+            if !actual.eq_ignore_ascii_case(&y.sha256) {
+                bail!("YARA rules {} do not match the digest in the pack", y.file);
+            }
+            let source = std::str::from_utf8(&bytes).with_context(|| format!("YARA rules {} are not UTF-8", y.file))?;
+            let rules = crate::yara::YaraRules::compile(source)?;
+            if rules.len() as u64 != y.rules {
+                bail!("YARA rules {} hold {} rules, the pack says {}", y.file, rules.len(), y.rules);
+            }
+            rep = rep.with_yara(rules, &actual);
+        }
+        Ok(rep)
     }
 
     pub fn from_lists(lists: Vec<(HashSetRef, HashList)>) -> Reputation {
         let fingerprint = fingerprint(&lists);
-        Reputation { lists, fingerprint }
+        Reputation { lists, fingerprint, yara: None }
+    }
+
+    /// Adds compiled YARA rules; `digest` (of their source) joins the fingerprint, so the scan
+    /// cache looks at every file again when the rules change.
+    pub fn with_yara(mut self, rules: crate::yara::YaraRules, digest: &str) -> Reputation {
+        let mut h = Sha256::new();
+        h.update(self.fingerprint.as_bytes());
+        h.update(b"yara");
+        h.update(digest.as_bytes());
+        h.update(crate::yara::ENGINE.as_bytes());
+        self.fingerprint = hex::encode(h.finalize());
+        self.yara = Some(rules);
+        self
+    }
+
+    pub fn yara(&self) -> Option<&crate::yara::YaraRules> {
+        self.yara.as_ref()
     }
 
     /// Changes whenever any list's content or treatment changes.
@@ -143,5 +179,32 @@ mod tests {
         assert!(HashList::from_bytes(&bin).is_err());
         assert!(HashList::from_bytes(&[0u8; 31]).is_err());
         assert!(HashList::build_from_text("nothex").is_err());
+    }
+
+    #[test]
+    fn yara_rules_beside_the_pack_are_checked_compiled_and_used() {
+        let dir = std::env::temp_dir().join(format!("genra-rep-yara-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = "rule Demo_Family_Marker { strings: $a = \"genra-yara-test-marker\" condition: $a }\n";
+        std::fs::write(dir.join("yara-test.yar"), src).unwrap();
+        let digest = hex::encode(Sha256::digest(src.as_bytes()));
+        let pack_with = |sha: &str, rules: u64| {
+            crate::rules::Pack::parse(format!(r#"{{"format":1,"version":1,"published":"t","yara":{{"file":"yara-test.yar","sha256":"{sha}","rules":{rules},"source":"test"}}}}"#).as_bytes()).unwrap()
+        };
+        let rep = Reputation::load(&pack_with(&digest, 1), &dir).unwrap();
+        assert_eq!(rep.yara().map(|y| y.len()), Some(1));
+        assert_ne!(rep.fingerprint(), Reputation::default().fingerprint(), "rules change the cache fingerprint");
+        let r = crate::scan_with(b"..genra-yara-test-marker..", None, Some(&rep));
+        assert_eq!(r.findings.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>(), ["yara.Demo_Family_Marker"]);
+        assert_eq!(r.verdict, Some(crate::rules::Severity::Suspicious));
+        // The pack's disabled list switches a rule off.
+        let mut p = pack_with(&digest, 1);
+        p.disabled.push("yara.Demo_Family_Marker".into());
+        assert!(crate::scan_with(b"..genra-yara-test-marker..", Some(&p), Some(&rep)).findings.is_empty());
+        // A wrong digest or count is refused.
+        assert!(Reputation::load(&pack_with(&"0".repeat(64), 1), &dir).is_err());
+        assert!(Reputation::load(&pack_with(&digest, 2), &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
