@@ -110,7 +110,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release download rules-latest -p pack.json -p pack.json.sig -D pack
-          python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json", encoding="utf-8")).get("hash_sets", [])]' > lists
+          python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json", encoding="utf-8")).get("hash_sets", [])]' | tr -d '\r' > lists
           grep -qvE '^[A-Za-z0-9._-]+\.bin$' lists && { echo "odd hash list name"; exit 1; }
           while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
       - name: Clean corpus
