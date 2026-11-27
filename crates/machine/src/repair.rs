@@ -66,6 +66,8 @@ pub enum Action {
     SetOfficeMacroPolicy { app: OfficeApp, level: MacroLevel },
     /// Switch off a startup item from [`startup::list`] (user scope only).
     DisableStartupItem { id: String },
+    /// Windows: clear Hidden and System on an item a USB worm hid (its other attributes stay).
+    Unhide { path: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,11 +126,13 @@ pub struct Scope<'a> {
     /// Where other infected workbooks are looked for (the quick-scan targets).
     pub scan_roots: Vec<PathBuf>,
     pub excel: ExcelStatus,
+    /// Removable drives mounted now: a threat on one of them also gets the USB worm clean-up.
+    pub removable: Vec<PathBuf>,
 }
 
 impl<'a> Scope<'a> {
     pub fn this_machine(pack: Option<&'a Pack>, reputation: Option<&'a Reputation>) -> Scope<'a> {
-        Scope { pack, reputation, xlstart_dirs: xlstart_dirs(), scan_roots: targets::quick_targets(), excel: office::excel_status() }
+        Scope { pack, reputation, xlstart_dirs: xlstart_dirs(), scan_roots: targets::quick_targets(), excel: office::excel_status(), removable: targets::removable_volumes() }
     }
 }
 
@@ -203,6 +207,45 @@ fn replace_step(path: &Path, excel: &ExcelStatus) -> Step {
     }
 }
 
+/// Office types the cleaner can rewrite without macros.
+pub fn is_office_document(path: &Path) -> bool {
+    const OFFICE: &[&str] = &["doc", "docx", "docm", "dot", "dotm", "xls", "xlsx", "xlsm", "xlsb", "xlt", "xltm", "xla", "xlam", "ppt", "pptx", "pptm", "pps", "ppsm"];
+    path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).is_some_and(|e| OFFICE.contains(&e.as_str()))
+}
+
+fn quarantine_step(path: &Path, sha256: &str) -> Step {
+    let name = name_of(path);
+    Step {
+        action: Action::QuarantineFile { path: path.to_path_buf(), expected_sha256: sha256.to_string() },
+        title_vi: format!("Cất “{name}” vào khu cách ly (giữ 30 ngày, lấy lại được)"),
+        title_en: format!("Move “{name}” to quarantine (kept 30 days, can be restored)"),
+        needs: None,
+    }
+}
+
+/// The USB worm clean-up when the threat sits on a removable drive: quarantine the worm's
+/// shortcuts and files, show the user's hidden items again (usb.rs decides what is safe to touch).
+fn usb_steps(path: &Path, scope: &Scope, this: &Path) -> Vec<Step> {
+    let Some(root) = scope.removable.iter().find(|r| path.starts_with(r)) else { return Vec::new() };
+    let layout = crate::usb::layout(root, scope.pack, scope.reputation);
+    let mut steps = Vec::new();
+    for (p, sha) in layout.shortcuts.iter().chain(layout.payload.iter()) {
+        if crate::journal::resolved(p) != this {
+            steps.push(quarantine_step(p, sha));
+        }
+    }
+    for p in &layout.hidden {
+        let name = name_of(p);
+        steps.push(Step {
+            action: Action::Unhide { path: p.clone() },
+            title_vi: format!("Hiện lại “{name}” trên USB"),
+            title_en: format!("Show “{name}” on the USB stick again"),
+            needs: None,
+        });
+    }
+    steps
+}
+
 fn xlstart_step(path: &Path, excel: &ExcelStatus) -> Step {
     let name = name_of(path);
     Step {
@@ -237,7 +280,19 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
     let this = crate::journal::resolved(path);
     let in_xlstart = |p: &Path| targets::in_startup_folder(p) || p.parent().is_some_and(|d| scope.xlstart_dirs.iter().any(|x| x == d || crate::journal::resolved(x) == crate::journal::resolved(d)));
     let threat_in_xlstart = in_xlstart(path);
-    let mut steps = vec![if threat_in_xlstart { xlstart_step(path, &scope.excel) } else { replace_step(path, &scope.excel) }];
+    // Office documents are cleaned (data kept); anything else (a shortcut, a script, a program)
+    // has nothing to keep and is moved to quarantine.
+    let first = if threat_in_xlstart {
+        xlstart_step(path, &scope.excel)
+    } else if is_office_document(path) {
+        replace_step(path, &scope.excel)
+    } else {
+        quarantine_step(path, &report.sha256)
+    };
+    let mut steps = vec![first];
+    let usb = usb_steps(path, scope, &this);
+    let usb_counts = (usb.iter().filter(|s| matches!(s.action, Action::QuarantineFile { .. })).count(), usb.iter().filter(|s| matches!(s.action, Action::Unhide { .. })).count());
+    steps.extend(usb);
     let mut xlstart = usize::from(threat_in_xlstart);
     if persists_in_xlstart(report, scope.pack) {
         for dir in &scope.xlstart_dirs {
@@ -275,7 +330,14 @@ pub fn plan_for_threat_in(path: &Path, report: &Report, scope: &Scope) -> Plan {
         }
     }
     let files = steps.iter().filter(|s| matches!(s.action, Action::ReplaceWithClean { .. })).count();
-    let (summary_vi, summary_en) = if xlstart > 0 && files == 0 {
+    let (summary_vi, summary_en) = if usb_counts.1 > 0 {
+        (
+            format!("Dọn USB: cất {} tệp của sâu · hiện lại {} thư mục, tệp bị giấu · không xoá gì", usb_counts.0 + 1, usb_counts.1),
+            format!("Clean the USB stick: move away {} worm file(s) · show {} hidden folder(s) and file(s) again · nothing deleted", usb_counts.0 + 1, usb_counts.1),
+        )
+    } else if files == 0 && xlstart == 0 {
+        ("Cất tệp vào khu cách ly · không đụng gì khác".to_string(), "Move the file to quarantine · nothing else is touched".to_string())
+    } else if xlstart > 0 && files == 0 {
         ("Gỡ sâu khỏi Excel · không đụng gì khác".to_string(), "Remove the worm from Excel · nothing else is touched".to_string())
     } else if xlstart > 0 {
         (format!("Gỡ sâu khỏi Excel · làm sạch {files} tệp · không đụng gì khác"), format!("Remove the worm from Excel · clean {files} file(s) · nothing else is touched"))
@@ -560,6 +622,16 @@ fn do_step(action: &Action, group: &str, j: &mut Journal) -> Result<StepDone> {
         Action::DisableStartupItem { id } => {
             let (vi, en) = startup::disable(id, group, j)?;
             Ok((StepState::Done, Did::Other, vi, en))
+        }
+        Action::Unhide { path } => {
+            let mask = crate::attrs::HIDDEN | crate::attrs::SYSTEM;
+            let now = crate::attrs::get(path)?;
+            if now & mask == 0 {
+                return Ok((StepState::Skipped, Did::Other, "Đã hiện sẵn.".into(), "Already visible.".into()));
+            }
+            let name = name_of(path);
+            j.set_attributes(group, path, now & !mask, &format!("Hiện lại “{name}”"), &format!("Show “{name}” again"))?;
+            Ok((StepState::Done, Did::Other, "Đã hiện lại, dữ liệu vẫn nguyên.".into(), "Visible again; the data is untouched.".into()))
         }
     }
 }

@@ -34,8 +34,8 @@ Catch and clean the common malware people get, not only Office macros, while sta
 - [x] 1a. Measurement harness: weekly report, first run 27/11: 570 recent samples, 43 % caught
       (13 % without hash lists), 3 % rated malware; 0 false positives on 21 713 clean files.
 - [ ] 1b. Graded hash reputation: trusted families quarantine, re-checked at signing, signed-file rail.
-- [ ] 2. Inside archives; scripts, shortcuts, double extensions; USB worm pattern, and USB
-      disinfection that unhides the real folders.
+- [x] 2. Inside archives; scripts, shortcuts, double extensions (#25); USB worm clean-up that
+      unhides the real folders (#26).
 - [ ] 2b. Disinfection on the machine: startup entries, running process, Defender exclusions.
 - [ ] 3. YARA-X engine with rule sets we may redistribute.
 - [ ] 4. Windows Defender as a second opinion on suspicious files.

@@ -121,6 +121,8 @@
   "result.plan.machine": "Remove the worm from Excel and clean the other infected files",
   "result.plan.verify": "Check the clean copy again afterwards",
   "result.plan.quarantine": "Move the file aside; you can get it back for 30 days",
+  "result.plan.usb": "If the file is on a USB stick: move away the fake shortcuts and show the hidden folders and files again",
+  "result.plan.verify_any": "Check again after cleaning",
   "result.suspicious.advice": "If you are not sure who sent it, do not enable macros when opening it.",
   "result.clean": "Clean it for me",
   "result.cleaning": "Cleaning…",

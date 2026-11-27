@@ -7,7 +7,7 @@
 use crate::packs::Loaded;
 use anyhow::{bail, Context, Result};
 use genra_av_core::quarantine::Quarantine;
-use genra_av_core::{clean, scan_with, Report};
+use genra_av_core::{clean, scan_named, Report};
 use genra_av_machine::repair::{Action, Outcome, Plan, RunReport, StepState};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -71,13 +71,14 @@ pub fn family_of(r: &Report) -> String {
 /// that the cleaner can make a macro-free copy of it.
 pub fn precheck(rules: &Loaded, path: &Path) -> std::result::Result<Report, Failure> {
     let bytes = read_checked(path).map_err(|e| Failure::failed("read", e))?;
-    let report = scan_with(&bytes, Some(&rules.pack), Some(&rules.reputation));
+    let report = scan_named(&crate::util::file_name(path), &bytes, Some(&rules.pack), Some(&rules.reputation));
     if report.verdict.is_none_or(|v| v < genra_av_core::rules::Severity::Suspicious) {
         return Err(Failure::failed("nothing_to_clean", "the file has no finding to clean"));
     }
-    // A worm copy in Excel's startup folder is moved out, not cleaned: no cleaner check needed.
+    // A worm copy in Excel's startup folder is moved out, not cleaned, and anything that is not
+    // an Office document (a shortcut, a script, an archive) is quarantined: no cleaner check.
     let in_xlstart = genra_av_core::targets::in_startup_folder(path) || path.parent().is_some_and(|d| genra_av_machine::repair::xlstart_dirs().iter().any(|x| x == d));
-    if !in_xlstart {
+    if !in_xlstart && genra_av_machine::repair::is_office_document(path) {
         clean::clean(&bytes).map_err(|e| refusal(&e))?;
     }
     Ok(report)
@@ -99,7 +100,7 @@ pub fn keep_cleanable(plan: &mut Plan) {
 /// "Cách ly tệp này": moves the file aside (restorable for 30 days) after checking it is the one scanned.
 pub fn quarantine_file(data: &Path, rules: &Loaded, path: &Path) -> std::result::Result<genra_av_core::quarantine::Item, Failure> {
     let bytes = read_checked(path).map_err(|e| Failure::failed("read", e))?;
-    let report = scan_with(&bytes, Some(&rules.pack), Some(&rules.reputation));
+    let report = scan_named(&crate::util::file_name(path), &bytes, Some(&rules.pack), Some(&rules.reputation));
     let q = quarantine(data).map_err(|e| Failure::failed("quarantine", e))?;
     q.put(path, &report.sha256, &family_of(&report)).map_err(|e| Failure::failed("quarantine", format!("{e:#}")))
 }

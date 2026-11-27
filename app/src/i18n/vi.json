@@ -121,6 +121,8 @@
   "result.plan.machine": "Gỡ sâu khỏi Excel và làm sạch các tệp đã bị lây",
   "result.plan.verify": "Kiểm tra lại tệp sạch sau khi dọn",
   "result.plan.quarantine": "Chuyển tệp vào khu cách ly, lấy lại được trong 30 ngày",
+  "result.plan.usb": "Nếu tệp nằm trên USB: cất các lối tắt giả và hiện lại thư mục, tệp bị giấu",
+  "result.plan.verify_any": "Kiểm tra lại sau khi dọn",
   "result.suspicious.advice": "Nếu không chắc người gửi, đừng bật macro khi mở tệp này.",
   "result.clean": "Dọn sạch giúp tôi",
   "result.cleaning": "Đang dọn…",

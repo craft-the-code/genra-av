@@ -80,6 +80,7 @@ impl Machine for Real {
             xlstart_dirs: repair::xlstart_dirs(),
             scan_roots: genra_av_core::targets::quick_targets(),
             excel: self.excel_status(),
+            removable: genra_av_core::targets::removable_volumes(),
         };
         repair::plan_for_threat_in(path, report, &scope)
     }

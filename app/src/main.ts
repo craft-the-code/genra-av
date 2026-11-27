@@ -717,9 +717,15 @@ function threatResult(r: ScanResult): string {
   const quarantineOnly = r.hash_only || a.s === "refused";
   const step = (txt: string, soon = false) =>
     `<li>${line("chevron-right", 14)}<span>${esc(txt)}${soon ? ` <span class="soon-tag">${esc(t("soon"))}</span>` : ""}</span></li>`;
+  // Office documents are cleaned with their data kept; anything else (a shortcut, a script, an
+  // archive, a program) has nothing to keep and is moved aside, and on a USB stick the worm's
+  // other shortcuts go too and the hidden folders come back (machine/repair.rs, usb.rs).
+  const office = /\.(docx?|docm|dotm?|xls[xmbt]?|xltm|xlam?|pptx?|pptm|ppsm?)$/i.test(r.name);
   const plan = quarantineOnly
     ? step(t("result.plan.quarantine"))
-    : step(t("result.plan.replace")) + step(t("result.plan.machine")) + step(t("result.plan.verify"));
+    : office
+      ? step(t("result.plan.replace")) + step(t("result.plan.machine")) + step(t("result.plan.verify"))
+      : step(t("result.plan.quarantine")) + step(t("result.plan.usb")) + step(t("result.plan.verify_any"));
   let status = "";
   if (working && a.what === "clean") status = progressBlock();
   if (a.s === "refused")
