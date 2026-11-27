@@ -87,7 +87,7 @@ pub fn precheck(rules: &Loaded, path: &Path) -> std::result::Result<Report, Fail
 /// Drops "clean this other file" steps the cleaner would refuse (an encrypted workbook, old
 /// Excel 4.0 macros): one of them failing would roll back the whole repair. They stay where they
 /// are and the next quick scan lists them with "Cách ly tệp này". The detected file itself is
-/// checked by [`precheck`] before planning, so step 0 is kept.
+/// checked by [`precheck`] before planning, so the first step is always kept (for a threat that goes to quarantine there is no `ReplaceWithClean` to drop).
 pub fn keep_cleanable(plan: &mut Plan) {
     let mut first = true;
     plan.steps.retain(|s| {
@@ -131,6 +131,8 @@ pub enum RepairView {
         cleaned: Vec<CleanedView>,
         /// Steps with nothing to do (already as wanted).
         skipped: usize,
+        /// What was done on the machine besides the file (steps that were done, not skipped).
+        machine: MachineDone,
         verified: bool,
         report: RunReport,
     },
@@ -138,6 +140,43 @@ pub enum RepairView {
     NeedsExcel { group_id: String, name: String, open_documents: Vec<String>, report: RunReport },
     /// A step failed; everything done before was undone (or, rarely, could not be).
     NotDone { name: String, rolled_back: bool, report: RunReport },
+}
+
+/// Counts for the done screen: programs stopped, startup entries switched off, Windows tools
+/// unlocked, items on a USB stick shown again, and steps Windows did not allow (said once).
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct MachineDone {
+    pub stopped: usize,
+    pub startup: usize,
+    pub unlocked: usize,
+    pub shown: usize,
+    /// Machine steps that could not be done (admin rights, or Windows refused to stop it).
+    pub left: usize,
+}
+
+fn machine_done(plan: &Plan, report: &RunReport) -> MachineDone {
+    let mut m = MachineDone::default();
+    for (s, r) in plan.steps.iter().zip(&report.steps) {
+        let done = r.state == StepState::Done;
+        let slot = match &s.action {
+            Action::StopProcess { .. } => &mut m.stopped,
+            Action::DisableStartupItem { .. } | Action::DisableThreatStartup { .. } | Action::DisableScheduledTask { .. } => &mut m.startup,
+            Action::LiftLock { .. } => &mut m.unlocked,
+            Action::Unhide { .. } => &mut m.shown,
+            // A threat still running is left for after the restart: counted in `left` below.
+            Action::QuarantineFile { .. } if r.state == StepState::NotAllowed => {
+                m.left += 1;
+                continue;
+            }
+            _ => continue,
+        };
+        if done {
+            *slot += 1;
+        } else if r.state == StepState::NotAllowed {
+            m.left += 1;
+        }
+    }
+    m
 }
 
 pub fn view(plan: &Plan, name: &str, family: &str, report: RunReport) -> RepairView {
@@ -173,6 +212,7 @@ pub fn view(plan: &Plan, name: &str, family: &str, report: RunReport) -> RepairV
                 xlstart,
                 cleaned,
                 skipped: report.steps.iter().filter(|s| s.state == StepState::Skipped).count(),
+                machine: machine_done(plan, &report),
                 verified: report.verified,
                 report,
             }
@@ -288,5 +328,22 @@ mod tests {
 
         let v = view(&p, "a.xls", "", report(Outcome::RolledBack { failed_step: 1, error: "x".into() }, &[StepState::Done, StepState::Failed]));
         assert!(matches!(v, RepairView::NotDone { rolled_back: true, .. }));
+    }
+
+    #[test]
+    fn the_view_counts_what_was_done_on_the_machine() {
+        let p = plan(vec![
+            Action::StopProcess { pid: 1, started: "t".into(), path: "/x.js".into(), program: "wscript.exe".into(), image: false },
+            Action::QuarantineFile { path: "/x.js".into(), expected_sha256: "00".into() },
+            Action::DisableThreatStartup { id: "run:x".into() },
+            Action::DisableScheduledTask { name: "\\x".into() },
+            Action::LiftLock { key: "k".into(), name: "n".into() },
+            Action::Unhide { path: "/u".into() },
+        ]);
+        let states = [StepState::Done, StepState::Done, StepState::Done, StepState::NotAllowed, StepState::Skipped, StepState::Done];
+        let v = view(&p, "x.js", "", report(Outcome::Done, &states));
+        let RepairView::Done { machine, .. } = &v else { panic!("{v:?}") };
+        assert_eq!(machine, &MachineDone { stopped: 1, startup: 1, unlocked: 0, shown: 1, left: 1 });
+        assert_eq!(serde_json::to_value(&v).unwrap()["machine"]["left"], 1);
     }
 }

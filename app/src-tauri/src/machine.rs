@@ -81,6 +81,9 @@ impl Machine for Real {
             scan_roots: genra_av_core::targets::quick_targets(),
             excel: self.excel_status(),
             removable: genra_av_core::targets::removable_volumes(),
+            persistence: None,
+            processes: None,
+            locks: None,
         };
         repair::plan_for_threat_in(path, report, &scope)
     }

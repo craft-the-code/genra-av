@@ -725,7 +725,7 @@ function threatResult(r: ScanResult): string {
     ? step(t("result.plan.quarantine"))
     : office
       ? step(t("result.plan.replace")) + step(t("result.plan.machine")) + step(t("result.plan.verify"))
-      : step(t("result.plan.quarantine")) + step(t("result.plan.usb")) + step(t("result.plan.verify_any"));
+      : step(t("result.plan.quarantine")) + step(t("result.plan.traces")) + step(t("result.plan.usb")) + step(t("result.plan.verify_any"));
   let status = "";
   if (working && a.what === "clean") status = progressBlock();
   if (a.s === "refused")
@@ -810,15 +810,19 @@ function doneResult(a: Extract<Act, { s: "repaired" }>): string {
     items.push(item("ok", t("done.clean.many", { n: d.cleaned.length }), t("done.clean.many.detail", { name: d.cleaned[0].name, more: d.cleaned.length - 1 })));
   }
   items.push(item("ok", t("done.quarantine"), t("done.quarantine.detail")));
+  const m = d.machine ?? { stopped: 0, startup: 0, unlocked: 0, shown: 0, left: 0 };
+  for (const k of ["stopped", "startup", "unlocked", "shown"] as const)
+    if (m[k] > 0) items.push(item("ok", t(`done.${k}`), t(`done.${k}.detail`, { n: m[k] })));
   if (d.verified) items.push(item("ok", t("done.verify"), t("done.verify.detail")));
-  const machine = d.xlstart.length > 0;
+  if (m.left > 0) items.push(item("warn", t("done.left"), t("done.left.detail", { n: m.left })));
+  const machine = d.xlstart.length > 0 || m.stopped + m.startup + m.unlocked > 0;
   const first = d.cleaned[0];
   return `<section class="card hero result" aria-labelledby="res-title">
     ${icon("ok")}
     <div class="result-body">
       <div class="result-head">
-        <h2 id="res-title">${esc(t(machine ? "done.title.machine" : "done.title"))}</h2>
-        <p>${esc(t(machine ? "done.text.machine" : "done.text"))}</p>
+        <h2 id="res-title">${esc(t(m.left > 0 ? "done.title.partial" : machine ? "done.title.machine" : "done.title"))}</h2>
+        <p>${esc(t(m.left > 0 ? "done.text.partial" : machine ? "done.text.machine" : "done.text"))}</p>
       </div>
       <ul class="done-steps" data-fid="done-steps">${items.join("")}</ul>
       <div class="card inset tell">${line("message-square")}<span>${esc(t("done.tell"))}</span></div>

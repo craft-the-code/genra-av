@@ -35,7 +35,7 @@ export interface RulesInfo {
 /** A repair or quarantine that did not happen. `refused`: the cleaner will not touch this file. */
 export interface Failure { kind: "refused" | "failed"; code: string; detail: string }
 
-export type StepState = "started" | "done" | "skipped" | "failed";
+export type StepState = "started" | "done" | "skipped" | "not_allowed" | "failed";
 export interface StepProgress { index: number; total: number; title_vi: string; title_en: string; state: StepState }
 export interface RepairProgress { phase: "planning" | "step"; step: StepProgress | null }
 export interface StepResult {
@@ -71,6 +71,7 @@ export type RepairDone = {
   xlstart: string[];
   cleaned: CleanedView[];
   skipped: number;
+  machine: { stopped: number; startup: number; unlocked: number; shown: number; left: number };
   verified: boolean;
   report: RunReport;
 };

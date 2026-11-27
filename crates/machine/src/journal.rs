@@ -39,6 +39,8 @@ pub enum Change {
     MoveRegistryValue { key: String, name: String, value: RegValue, backup_key: String },
     /// `path`'s attribute bits changed from `previous` to `new` (Windows Hidden/System).
     SetAttributes { path: PathBuf, previous: u32, new: u32 },
+    /// A scheduled task switched off (it was on). Undo switches it on again.
+    DisableTask { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,6 +334,20 @@ impl Journal {
         self.end(group_id, &id, r, |_| None)
     }
 
+    /// Switches a scheduled task off, if it is on now.
+    pub fn disable_task(&mut self, group_id: &str, name: &str, title_vi: &str, title_en: &str) -> Result<()> {
+        match crate::traces::task_enabled(name)? {
+            Some(true) => {}
+            Some(false) => bail!("task {name} is already off"),
+            None => bail!("task {name} no longer exists"),
+        }
+        let id = self.begin(group_id, Change::DisableTask { name: name.into() }, title_vi, title_en)?;
+        // A helper that timed out after the task was switched off still switched it off: the
+        // entry must say Done, or undo would never switch it back on.
+        let r = crate::traces::set_task_enabled(name, false).or_else(|e| if matches!(crate::traces::task_enabled(name), Ok(Some(false))) { Ok(()) } else { Err(e) });
+        self.end(group_id, &id, r, |_| None)
+    }
+
     /// The quarantine item holding an entry's file: from its "done" line, or (if Genra stopped
     /// before writing it) the item with the same origin and hash put there since the entry.
     fn find_quarantined(&self, e: &Entry) -> Option<String> {
@@ -411,6 +427,13 @@ impl Journal {
                     bail!("{} changed since; not touching it", path.display())
                 }
             }
+            Change::DisableTask { name } => match crate::traces::task_enabled(name)? {
+                Some(false) => Ok(true),
+                // Never switched off, or switched on again since (by the user): nothing to undo.
+                Some(true) => Ok(false),
+                // Deleted since (by the user or another tool): nothing left to switch on.
+                None => Ok(false),
+            },
             Change::MoveRegistryValue { key, name, value, backup_key } => {
                 let (here, backup) = (reg::get(key, name)?, reg::get(backup_key, name)?);
                 match (here, backup) {
@@ -440,6 +463,7 @@ impl Journal {
                 reg::set(key, name, value)?;
                 reg::delete_value(backup_key, name)?;
             }
+            Change::DisableTask { name } => crate::traces::set_task_enabled(name, true)?,
             Change::SetAttributes { path, previous, .. } => {
                 // Only the hide bits go back; anything else the user changed since is kept.
                 let mask = crate::attrs::HIDDEN | crate::attrs::SYSTEM;
