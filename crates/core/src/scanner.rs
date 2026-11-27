@@ -94,10 +94,12 @@ pub struct Context<'a> {
 /// Everything besides the hash lists that decides a verdict: the engine build and the pack's
 /// rules, disabled ids and allow list. Deliberately not the pack version alone: a new pack
 /// every few hours that only grows the hash lists must not force a full rescan.
-fn rules_fingerprint(pack: Option<&Pack>) -> String {
+fn rules_fingerprint(pack: Option<&Pack>, reputation: Option<&Reputation>) -> String {
     let mut h = Sha256::new();
     h.update(env!("CARGO_PKG_VERSION").as_bytes());
     h.update(crate::ENGINE.to_le_bytes());
+    // YARA rules read the file's content: new rules mean reading files seen clean again.
+    h.update(reputation.map(|r| r.yara_digest()).unwrap_or("").as_bytes());
     if let Some(p) = pack {
         h.update(serde_json::to_vec(&(&p.rules, &p.disabled, &p.allow_sha256)).unwrap_or_default());
     }
@@ -106,7 +108,7 @@ fn rules_fingerprint(pack: Option<&Pack>) -> String {
 
 impl<'a> Context<'a> {
     pub fn new(pack: Option<&'a Pack>, reputation: Option<&'a Reputation>, cache: Cache) -> Context<'a> {
-        let rules_fp = rules_fingerprint(pack);
+        let rules_fp = rules_fingerprint(pack, reputation);
         let hashes_fp = reputation.map(|r| r.fingerprint().to_string()).unwrap_or_default();
         Context { pack, reputation, cache, rules_fp, hashes_fp }
     }
@@ -296,6 +298,21 @@ mod tests {
 
         let s = walk(&mut ctx, std::slice::from_ref(&root), |_| {});
         assert_eq!((s.files_cached, s.files_read), (1, 1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn new_yara_rules_read_files_seen_clean_again() {
+        let root = tmp("newyara");
+        std::fs::write(root.join("a.js"), b"var x = 'genra-yara-cache-marker';").unwrap();
+        let none = Reputation::default();
+        let mut ctx = Context::new(None, Some(&none), Cache::default());
+        assert!(walk(&mut ctx, std::slice::from_ref(&root), |_| {}).hits.is_empty());
+        let y = crate::yara::YaraRules::compile("rule Cache_Marker { strings: $a = \"genra-yara-cache-marker\" condition: $a }").unwrap();
+        let with = Reputation::default().with_yara(y, "d1");
+        let mut ctx = Context::new(None, Some(&with), ctx.cache);
+        let s = walk(&mut ctx, std::slice::from_ref(&root), |_| {});
+        assert_eq!((s.hits.len(), s.files_read), (1, 1), "read and scanned again, not just looked up by hash");
         let _ = std::fs::remove_dir_all(&root);
     }
 

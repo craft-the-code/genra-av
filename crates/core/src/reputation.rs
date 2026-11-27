@@ -67,6 +67,8 @@ pub struct Reputation {
     yara: Option<crate::yara::YaraRules>,
     /// Why the pack's YARA rules are not in use, when they are not (the hash lists still are).
     yara_error: Option<String>,
+    /// Digest of the YARA source in use (empty: none), for the scan cache's rules fingerprint.
+    yara_digest: String,
 }
 
 /// Identifies a set of lists by their content and how a match is treated, so the scan cache can
@@ -141,20 +143,21 @@ impl Reputation {
 
     pub fn from_lists(lists: Vec<(HashSetRef, HashList)>) -> Reputation {
         let fingerprint = fingerprint(&lists);
-        Reputation { lists, fingerprint, yara: None, yara_error: None }
+        Reputation { lists, fingerprint, yara: None, yara_error: None, yara_digest: String::new() }
     }
 
-    /// Adds compiled YARA rules; `digest` (of their source) joins the fingerprint, so the scan
-    /// cache looks at every file again when the rules change.
+    /// Adds compiled YARA rules. Their `digest` (of the source) is part of the scan cache's
+    /// *rules* fingerprint (see [`yara_digest`](Self::yara_digest)), not of the hash-list one: a
+    /// file seen clean must be read and scanned again when the rules change, not only looked up.
     pub fn with_yara(mut self, rules: crate::yara::YaraRules, digest: &str) -> Reputation {
-        let mut h = Sha256::new();
-        h.update(self.fingerprint.as_bytes());
-        h.update(b"yara");
-        h.update(digest.as_bytes());
-        h.update(crate::yara::ENGINE.as_bytes());
-        self.fingerprint = hex::encode(h.finalize());
+        self.yara_digest = format!("{digest}/{}", crate::yara::ENGINE);
         self.yara = Some(rules);
         self
+    }
+
+    /// The YARA rules in use (digest and engine), empty when none.
+    pub fn yara_digest(&self) -> &str {
+        &self.yara_digest
     }
 
     pub fn yara(&self) -> Option<&crate::yara::YaraRules> {
@@ -220,7 +223,7 @@ mod tests {
         let rep = Reputation::load(&pack_with(&file, &digest, 1, ""), &dir).unwrap();
         assert_eq!(rep.yara().map(|y| y.len()), Some(1));
         assert!(rep.yara_error().is_none());
-        assert_ne!(rep.fingerprint(), Reputation::default().fingerprint(), "rules change the cache fingerprint");
+        assert!(rep.yara_digest().starts_with(&digest), "the rules are part of the scan cache's rules fingerprint");
         let r = crate::scan_with(b"..genra-yara-test-marker..", None, Some(&rep));
         assert_eq!(r.findings.iter().map(|f| f.rule.as_str()).collect::<Vec<_>>(), ["yara.Demo_Family_Marker"]);
         assert_eq!(r.verdict, Some(crate::rules::Severity::Suspicious));

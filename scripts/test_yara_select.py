@@ -67,6 +67,19 @@ rule SIGNATURE_BASE_HKTL_Mimikatz {
 \t\ttrue
 }
 
+global rule GLOBAL_GATE {
+	meta:
+		license_url = "https://github.com/Neo23x0/signature-base/blob/abc/LICENSE"
+	condition:
+		filesize < 10MB
+}
+
+rule NO_OWN_LICENCE {
+	condition:
+		true
+}
+/* license_url = "https://github.com/Neo23x0/signature-base/blob/abc/LICENSE" */
+
 rule AMBIGUOUS {
 \tmeta:
 \t\tlicense_url = "https://github.com/Neo23x0/signature-base/blob/abc/LICENSE"
@@ -112,7 +125,7 @@ class YaraSelect(unittest.TestCase):
     def test_only_licensed_unambiguous_rules_and_supported_modules(self):
         text = open(self.p("blocks.yar")).read()
         names = [m.group(1) for m in map(ys.RULE_LINE.match, text.splitlines()) if m]
-        self.assertEqual(names, ["KEPT_A", "KEPT_B", "Win32_Ransomware_Demo"], "GPL, disabled, hacking tool, ambiguous and RL's duplicate out")
+        self.assertEqual(names, ["KEPT_A", "KEPT_B", "Win32_Ransomware_Demo"], "GPL, disabled, hacking tool, global, unlicensed, ambiguous and RL's duplicate out")
         self.assertIn('import "pe"', text)
         self.assertNotIn('import "magic"', text, "a module the engine lacks would refuse every rule")
         self.assertNotIn("Repository Name", text, "comments between rules are dropped")
@@ -120,6 +133,7 @@ class YaraSelect(unittest.TestCase):
     def test_golden_count_matches_the_rust_reader(self):
         golden = open(os.path.join(HERE, "testdata/yara-count.yar"), encoding="utf-8").read()
         self.assertEqual(ys.count(golden), 6)
+        self.assertEqual(sum(1 for l in golden.splitlines() if cp.RULE_LINE.match(l)), 6, "check-pack counts the same")
 
     def test_assemble_is_deterministic_and_carries_licences_and_the_malware_list(self):
         out, out2 = os.path.join(self.d, "out"), os.path.join(self.d, "out2")
@@ -166,3 +180,35 @@ class YaraSelect(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class YaraCarry(unittest.TestCase):
+    def test_carries_the_previous_rules_or_none(self):
+        carry = load("yara_carry", "yara-carry.py")
+        d = tempfile.mkdtemp()
+        out, prev = os.path.join(d, "out"), os.path.join(d, "prev")
+        os.makedirs(out), os.makedirs(prev)
+        new = {"file": "yara-111111111111.yar", "rules": 1}
+        old = {"file": "yara-222222222222.yar", "rules": 2, "sha256": "2" * 64}
+        with open(os.path.join(out, new["file"]), "w") as f:
+            f.write("new")
+        with open(os.path.join(prev, old["file"]), "w") as f:
+            f.write("old")
+        with open(os.path.join(out, "pack.json"), "w") as f:
+            json.dump({"version": 2, "yara": new}, f)
+        with open(os.path.join(prev, "pack.json"), "w") as f:
+            json.dump({"version": 1, "yara": old}, f)
+        import sys
+        argv = sys.argv
+        try:
+            sys.argv = ["x", os.path.join(out, "pack.json"), prev]
+            quiet(carry.main)
+            p = json.load(open(os.path.join(out, "pack.json")))
+            self.assertEqual(p["yara"], old)
+            self.assertFalse(os.path.exists(os.path.join(out, new["file"])))
+            self.assertEqual(open(os.path.join(out, old["file"])).read(), "old")
+            os.remove(os.path.join(prev, "pack.json"))
+            quiet(carry.main)
+            self.assertNotIn("yara", json.load(open(os.path.join(out, "pack.json"))))
+        finally:
+            sys.argv = argv

@@ -72,11 +72,20 @@ def split_rules(text: str) -> tuple[set[str], list[tuple[str, str]]]:
         blocks[-1] = (name, lines, ok)
         if line.rstrip() == "}":
             open_block = False
-    return imports, [(n, "\n".join(b).rstrip() + "\n") for n, b, ok in blocks if ok]
+    out = []
+    for name, lines, ok in blocks:
+        filled = [l for l in lines if l.strip()]
+        # A rule whose last line is not its closing brace may have taken in the text after it.
+        # A global rule would gate every other rule (and the build removing one would widen them).
+        if ok and filled and filled[-1].rstrip().endswith("}") and not re.search(r"\bglobal\b", lines[0].split("rule", 1)[0]):
+            out.append((name, "\n".join(lines).rstrip() + "\n"))
+    return imports, out
 
 
 def licence_of(block: str, sources: list[dict]) -> dict | None:
-    m = re.search(r'^\s*license_url\s*=\s*"([^"]*)"', block, re.M)
+    # From the rule's own meta section only (before its strings and condition).
+    meta = re.split(r"^\s*(?:strings|condition)\s*:", block, maxsplit=1, flags=re.M)[0]
+    m = re.search(r'^\s*license_url\s*=\s*"([^"]*)"', meta, re.M)
     url = m.group(1) if m else ""
     for s in sources:
         if s.get("match") and url.startswith(s["match"]):
@@ -115,7 +124,7 @@ def select(args: list[str]) -> None:
         files = []
         for root, _, names in os.walk(opts["--rl"]):
             files += [os.path.join(root, n) for n in names if n.endswith((".yara", ".yar"))]
-        for path in sorted(files, key=lambda p: os.path.relpath(p, opts["--rl"])):
+        for path in sorted(files, key=lambda p: os.path.relpath(p, opts["--rl"]).replace(os.sep, "/")):
             imp, rules = split_rules(open(path, encoding="utf-8", errors="strict").read())
             imports |= imp
             for name, block in rules:

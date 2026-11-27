@@ -189,17 +189,20 @@ pub async fn update<F: Fetch>(data: &Path, fetch: &F, keys: &[VerifyingKey], now
             std::fs::write(staging.join(&set.file), bytes)?;
         }
         if let Some(y) = &pack.yara {
-            if !genra_av_core::reputation::yara_file_name_ok(&y.file) {
-                bail!("YARA rule file name {:?} is not yara-<sha12>.yar", y.file);
-            }
             // The rules change about once a week while the pack changes every few hours: an
-            // installed copy with the same digest is reused instead of downloaded again.
-            let have = std::fs::read(current.join(&y.file)).ok().filter(|b| hex::encode(Sha256::digest(b)).eq_ignore_ascii_case(&y.sha256));
-            let bytes = match have {
-                Some(b) => b,
-                None => fetch.get(&y.file, MAX_LIST).await?,
-            };
-            std::fs::write(staging.join(&y.file), bytes)?;
+            // installed copy with the same digest is reused instead of downloaded again. A file
+            // that cannot be had costs the YARA layer only (Reputation::load notes why); the
+            // hash lists still install.
+            if genra_av_core::reputation::yara_file_name_ok(&y.file) {
+                let have = std::fs::read(current.join(&y.file)).ok().filter(|b| hex::encode(Sha256::digest(b)).eq_ignore_ascii_case(&y.sha256));
+                let bytes = match have {
+                    Some(b) => Some(b),
+                    None => fetch.get(&y.file, MAX_LIST).await.ok(),
+                };
+                if let Some(b) = bytes {
+                    std::fs::write(staging.join(&y.file), b)?;
+                }
+            }
         }
         // Checks every list's (and the YARA rules') SHA-256 and count against the signed pack.
         Reputation::load(&pack, &staging)?;

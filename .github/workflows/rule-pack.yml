@@ -169,9 +169,11 @@ jobs:
           # No source file: the build carried the previous rules over; check-pack compares them
           # with the previous signed pack instead. A failed rebuild leaves yara-expected empty, and
           # check-pack then refuses any rules that are not the previous ones.
+          yok=1
           if [ -f out/yara-source.json ]; then
-            scripts/yara-build.sh reproduce yara-expected out/yara-source.json || rm -f yara-expected/*
+            scripts/yara-build.sh reproduce yara-expected out/yara-source.json || { rm -f yara-expected/*; yok=0; }
           fi
+          echo "YARA_OK=$yok" >> "$GITHUB_ENV"
 
       - name: Check the unsigned pack against base.json and the previous pack
         run: |
@@ -193,12 +195,22 @@ jobs:
               new=$(python3 -c 'import json; print((json.load(open("out/pack.json")).get("yara") or {}).get("rl_commit", ""))')
               if [ -n "$old" ] && [ -n "$new" ] && [ "$old" != "$new" ]; then
                 [[ "$old$new" =~ ^[0-9a-f]{80}$ ]] || { echo "odd ReversingLabs commit"; exit 1; }
-                st=$(gh api "repos/reversinglabs/reversinglabs-yara-rules/compare/$old...$new" --jq .status)
-                [ "$st" = ahead ] || { echo "ReversingLabs commit went back or sideways ($st)"; exit 1; }
+                st=$(gh api "repos/reversinglabs/reversinglabs-yara-rules/compare/$old...$new" --jq .status || echo failed)
+                [ "$st" = ahead ] || { echo "::warning::ReversingLabs commit went back or sideways ($st)"; YARA_OK=0; }
               fi
+              # The YARA Forge release may not go back either.
+              python3 -c 'import json,sys; p=json.load(open("prev/pack.json"))["yara"]; n=json.load(open("out/pack.json")).get("yara") or {}; sys.exit(0 if not n or n == p or n.get("forge_tag","") >= p.get("forge_tag","") else 1)' \
+                || { echo "::warning::YARA Forge release went back"; YARA_OK=0; }
+            fi
+            # Rules that cannot be confirmed this run: keep the previous signed ones (or none),
+            # so the hash lists still go out.
+            if [ "${YARA_OK:-1}" != 1 ]; then
+              rm -f yara-expected/*
+              python3 scripts/yara-carry.py out/pack.json prev
             fi
             python3 scripts/check-pack.py rules/base.json out/pack.json prev/pack.json --additions additions.txt --yara-expected yara-expected
           elif grep -q "release not found" <<<"$view"; then
+            if [ "${YARA_OK:-1}" != 1 ]; then python3 scripts/yara-carry.py out/pack.json prev; fi
             python3 scripts/check-pack.py rules/base.json out/pack.json --additions additions.txt --yara-expected yara-expected
           else
             echo "$view"
@@ -236,7 +248,8 @@ jobs:
           if [ -n "$tbin" ]; then gh release upload rules-latest --clobber "out/$tbin"; fi
           # Named by its digest: an asset with that name is already the same file. Uploading it
           # again (--clobber deletes first) would leave the live pack pointing at nothing meanwhile.
-          if [ -n "$yar" ] && ! gh release view rules-latest --json assets -q '.assets[].name' | grep -qxF "$yar"; then
+          assets=$(gh release view rules-latest --json assets -q '.assets[].name')
+          if [ -n "$yar" ] && ! grep -qxF "$yar" <<<"$assets"; then
             gh release upload rules-latest "out/$yar"
           fi
           gh release upload rules-latest --clobber out/pack.json

@@ -39,7 +39,9 @@ fi
 # GitHub serves a fork's commits through the parent repository's URLs too: the commit must be on
 # ReversingLabs' own default branch, or anyone could get rules of their choice built here.
 branch=$(gh api repos/reversinglabs/reversinglabs-yara-rules --jq .default_branch)
-status=$(gh api "repos/reversinglabs/reversinglabs-yara-rules/compare/$commit...$branch" --jq .status)
+# compare/BASE...HEAD: "behind" means HEAD (the commit) is an ancestor of BASE (the branch tip);
+# a fork's commit reads "diverged", or "ahead" when built on top of the tip (measured 27/11).
+status=$(gh api "repos/reversinglabs/reversinglabs-yara-rules/compare/$branch...$commit" --jq .status)
 [ "$status" = behind ] || [ "$status" = identical ] || { echo "commit $commit is not on ReversingLabs' $branch ($status)" >&2; exit 1; }
 
 gh release download "$tag" --repo YARAHQ/yara-forge -p yara-forge-rules-core.zip -D "$work"
@@ -64,4 +66,6 @@ else
   "$py" -c 'import json,re,sys; r=json.load(open(sys.argv[1]))["refused"]; assert all(re.fullmatch(r"[A-Za-z0-9_]+", n) for n in r); print("\n".join(r))' "$src" > "$work/refused.txt"
 fi
 "$py" "$root/scripts/yara_select.py" assemble "$work/blocks.yar" "$work/refused.txt" "$root/rules/yara-malware.json" "$root/rules/licenses" "$out" > "$out/yara.json"
+# No rule left (the engine refused the whole set) is a failure, so the previous rules are kept.
+"$py" -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["rules"] > 0 else "no YARA rule left")' "$out/yara.json"
 cat "$out/yara.json"

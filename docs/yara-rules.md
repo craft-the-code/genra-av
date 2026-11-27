@@ -71,3 +71,7 @@ One file, with every entry of an archive inside it, gets at most 1.5 s of YARA t
 A rule that matches a clean file goes into `rules/yara-disabled.json`; the weekly detection report
 lists those rules by name. A single rule can also be switched off at once through the pack's
 `disabled` list (`yara.<rule name>`).
+
+`rules/yara-disabled.json` and `rules/yara-malware.json` take effect when the rules are next rebuilt.
+While the previous rules are carried over (a source down), they do not; the pack's own `disabled`
+list in `rules/base.json` (`yara.<rule name>`) always does, so that is the hotfix for a bad rule.

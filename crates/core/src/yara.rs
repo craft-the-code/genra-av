@@ -41,14 +41,20 @@ thread_local! {
 /// Runs `f` with one YARA time budget of [`TIMEOUT`] for everything it scans on this thread (a
 /// file and every entry of an archive inside it). Nested calls keep the outer deadline.
 pub fn with_budget<T>(f: impl FnOnce() -> T) -> T {
-    let outer = DEADLINE.with(|d| d.get());
-    if outer.is_some() {
+    if DEADLINE.with(|d| d.get()).is_some() {
         return f();
     }
+    /// Clears the deadline however `f` ends, a panic included: pooled threads are reused, and a
+    /// stale deadline would leave YARA off on that thread for good.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            DEADLINE.with(|d| d.set(None));
+        }
+    }
     DEADLINE.with(|d| d.set(Some(Instant::now() + TIMEOUT)));
-    let r = f();
-    DEADLINE.with(|d| d.set(None));
-    r
+    let _reset = Reset;
+    f()
 }
 
 impl std::fmt::Debug for YaraRules {
@@ -252,6 +258,8 @@ rule SIGNATURE_BASE_Demo_Confirmed {
             assert!(y.findings(b"xx genra-demo-stealer-marker yy").is_empty(), "no time left: no YARA");
         });
         assert!(DEADLINE.with(|d| d.get()).is_none());
+        let _ = std::panic::catch_unwind(|| with_budget(|| panic!("a parser bug")));
+        assert!(DEADLINE.with(|d| d.get()).is_none(), "a panic does not leave a stale deadline");
         assert_eq!(y.findings(b"xx genra-demo-stealer-marker yy").len(), 1);
     }
 
