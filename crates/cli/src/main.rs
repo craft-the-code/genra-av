@@ -281,7 +281,7 @@ fn run() -> Result<bool> {
         }
         Cmd::Rules(RulesCmd::Keygen { out }) => {
             let mut seed = [0u8; 32];
-            getrandom::getrandom(&mut seed).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
+            getrandom::fill(&mut seed).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
             let sk = SigningKey::from_bytes(&seed);
             let key = out.with_extension("key");
             let public = out.with_extension("pub");
