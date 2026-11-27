@@ -95,6 +95,41 @@ pub fn facts(bytes: &[u8]) -> Facts {
     f
 }
 
+// ---- plain zip archives (for the archive check in lib.rs) ----
+
+/// One entry of a plain zip: its name, whether it is encrypted, and its bytes when it could be
+/// read within the budget.
+pub struct ZipEntry {
+    pub name: String,
+    pub encrypted: bool,
+    pub data: Option<Vec<u8>>,
+}
+
+/// An OOXML package (it has `[Content_Types].xml`): read by the Office checks, not as an archive.
+pub fn is_office_package(bytes: &[u8]) -> bool {
+    open_zip(bytes).map(|ar| content_types_index(&ar).is_some()).unwrap_or(false)
+}
+
+/// Entries of a plain zip, at most `max` of them, files only, read on the same budget as Office
+/// packages (a zip bomb costs a bounded amount and the rest is skipped).
+pub fn zip_entries(bytes: &[u8], max: usize) -> Result<Vec<ZipEntry>> {
+    let mut ar = open_zip(bytes)?;
+    let mut budget = Budget::new(ZIP_BUDGET);
+    let mut out = Vec::new();
+    for i in 0..ar.len().min(max) {
+        let (name, encrypted, is_dir) = {
+            let f = ar.by_index_raw(i)?;
+            (f.name().to_string(), f.encrypted(), f.is_dir())
+        };
+        if is_dir {
+            continue;
+        }
+        let data = if encrypted { None } else { budget.read(&mut ar, i, 64 * 1024 * 1024).ok() };
+        out.push(ZipEntry { name: name.rsplit('/').next().unwrap_or(&name).to_string(), encrypted, data });
+    }
+    Ok(out)
+}
+
 // ---- zip reading shared with the cleaner ----
 
 /// Decompression budget for one input file.
@@ -244,6 +279,15 @@ fn zip_vba(bytes: &[u8], f: &mut Facts, budget: &mut Budget, depth: usize) -> Re
             }
         }
         let claimed = part.ends_with("vbaproject.bin") || types.as_ref().and_then(|t| t.type_of(part)).is_some_and(is_vba_project_type);
+        // A password-protected member of a plain zip cannot be read, and that alone says nothing
+        // about macros (the archive check reports locked programs). Only a member that claims to
+        // be a VBA project and cannot be read stays "unreadable".
+        if ar.by_index_raw(i).map(|m| m.encrypted()).unwrap_or(false) {
+            if claimed {
+                f.vba_unreadable = true;
+            }
+            continue;
+        }
         let head = budget.head(&mut ar, i)?;
         let is_ole = head.starts_with(&OLE_MAGIC);
         let is_zip = head.starts_with(ZIP_MAGIC);

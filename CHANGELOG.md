@@ -6,6 +6,16 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 ## [Unreleased]
 
 ### Added
+- Delivery checks (ADR 0004, step 2), all "suspicious" until measured:
+  - inside plain `.zip` archives, every entry is scanned the same way (two levels deep, zip-bomb
+    budget), reported as `<rule>@zip` with the entry's name; a password-protected zip holding a
+    program is `builtin.zip_locked_program`;
+  - scripts (`.js .vbs .hta .ps1 .bat` …) that download and run, or hide code and run it;
+  - `.lnk` shortcuts parsed per [MS-SHLLINK] that start PowerShell, cmd, mshta and the like with a
+    web address, hidden or encoded commands; `.url` shortcuts that open a program on another machine;
+  - disguised names: document extension before a program extension, right-to-left characters.
+- `scan_named` (core): the scan with the file's name; the app, the CLI, quick scans and startup
+  items use it. `ENGINE` is part of the scan cache fingerprint, so new checks re-read cached files.
 - Graded hash reputation (ADR 0004, step 1b): MalwareBazaar hashes of listed commodity families
   (`rules/families.json`), confirmed by at least two other analysis engines and listed for 48 hours,
   go to a trusted list that quarantines without asking; the signing job re-checks every addition
@@ -24,6 +34,7 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   their copies.
 
 ### Fixed
+- A plain password-protected zip no longer reads as "macros cannot be read".
 - Decompression is charged to the read budget even when a zip member fails part way, so a package of
   oversized members cannot keep the scanner busy; relationship parts and Workbook streams are read on
   their own small budgets and can no longer make a real VBA project look unreadable.

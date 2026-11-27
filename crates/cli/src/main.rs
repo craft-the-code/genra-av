@@ -375,7 +375,8 @@ fn scan_one(path: &Path, pack: Option<&Pack>, rep: Option<&Reputation>, json: bo
             return false;
         }
     };
-    let report = genra_av_core::scan_with(&bytes, pack, rep);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let report = genra_av_core::scan_named(&name, &bytes, pack, rep);
     let bad = report.verdict.is_some_and(|v| v >= Severity::Suspicious);
     if json {
         let mut v = serde_json::to_value(&report).unwrap_or_default();

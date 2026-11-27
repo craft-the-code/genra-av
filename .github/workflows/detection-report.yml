@@ -121,6 +121,12 @@ jobs:
           python scripts/eval/make_clean_office.py clean/office 200
           ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json clean/office > clean-office.jsonl || true
           ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
+          # Shortcuts and scripts Windows and installed programs ship: the false-positive check for
+          # the shortcut and script heuristics.
+          ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json \
+            "C:/ProgramData/Microsoft/Windows/Start Menu" "C:/Users/Public/Desktop" \
+            "C:/Windows/System32/WindowsPowerShell/v1.0/Modules" "C:/Program Files/WindowsPowerShell/Modules" \
+            > clean-scripts.jsonl 2>/dev/null || true
           wc -l clean-*.jsonl
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -144,7 +150,7 @@ jobs:
       - name: Report
         run: |
           clean=()
-          for f in results/clean-office.jsonl results/clean-system32.jsonl; do [ -f "$f" ] && clean+=(--clean "$f"); done
+          for f in results/clean-office.jsonl results/clean-system32.jsonl results/clean-scripts.jsonl; do [ -f "$f" ] && clean+=(--clean "$f"); done
           python3 scripts/eval/report.py --malware results/malware.jsonl --manifest results/manifest.json \
             "${clean[@]}" --json report.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
