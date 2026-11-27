@@ -94,8 +94,10 @@ quarantine anything.
 As built (step 4, `crates/machine/src/defender.rs`):
 
 - Asked: a file whose verdict is exactly suspicious (nothing on it already quarantines it) and
-  whose extension is a program, script, shortcut, disk image or archive (a document renamed to one
-  is still left out, by content), when `Get-MpComputerStatus` says the antivirus is on and in normal mode.
+  whose extension is a program, script, shortcut, disk image or archive (.msi included), and
+  which is not a document under another name: old-format Office files and files with macros by
+  the scan, new-format Office files and PDFs by their first bytes, read just before asking.
+  Defender is asked when `Get-MpComputerStatus` says the antivirus is on and in normal mode.
   Passive mode means another antivirus is in charge, which the user chose: Defender is not asked.
   Office documents, PDFs and other files of the user's own are left out: macros have Genra's own
   "Dọn sạch giúp tôi" (data kept), and those are the files most likely to carry the user's data
@@ -109,8 +111,9 @@ As built (step 4, `crates/machine/src/defender.rs`):
   be translated; exit code 0 is clean, 2 is a detection, anything else is no answer.
 - The finding's rule id is `defender.` plus the name with `:`, `/`, `!` as `_` (what reports and
   `pack.disabled` accept); `disabled: ["defender"]` switches the layer off.
-- One quick scan asks Defender about 20 files at most and for two minutes in all (60 s timeout
-  each); it stops asking after the first failure or when the user presses "Dừng". The window says
+- One quick scan asks Defender about 20 files at most and starts none after two minutes (one
+  already running may take its 60 s timeout); it stops asking after the first failure or when the
+  user presses "Dừng". Files past that budget still get an answer Defender already gave. The window says
   "đang hỏi thêm Windows Defender" meanwhile. An answer is kept for four hours by SHA-256, so
   opening the file or pressing "Dọn sạch giúp tôi" does not ask again.
 - Like the signed-file rail: a validly signed program is never moved on Defender's word alone; it
@@ -122,7 +125,9 @@ As built (step 4, `crates/machine/src/defender.rs`):
   report adds "Raised to malware by Defender", every other column staying Genra alone. With
   real-time protection on, as on users' machines, Defender already catches many of those files
   when Genra reads them, so that column is an upper bound on what the layer adds. Samples keep
-  their type's extension from step 4 on, so the app's per-extension choices are what is measured.
+  their type's extension from step 4 on, so the app's per-extension choices are what is measured;
+  this also lets Genra's own name checks fire, so the script and shortcut rows rise against older
+  reports (the report says so, and its JSON carries `naming`).
 
 ### What quarantines, what asks
 

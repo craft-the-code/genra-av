@@ -72,7 +72,9 @@ pub fn checked(report: genra_av_core::Report, path: &Path, rules: &Loaded) -> ge
 /// [`checked`], asking Defender only when `defender` is true. Also says what asking did.
 fn checked_with(mut report: genra_av_core::Report, path: &Path, rules: &Loaded, defender: bool) -> (genra_av_core::Report, Outcome) {
     genra_av_machine::rails::signed_file_rail(&mut report, path);
-    let outcome = if defender { genra_av_machine::defender::second_opinion(&mut report, path, &rules.pack.disabled) } else { Outcome::NotAsked };
+    let disabled = &rules.pack.disabled;
+    // Past the scan's budget, an answer Defender already gave is still used: it costs nothing.
+    let outcome = if defender { defender::second_opinion(&mut report, path, disabled) } else { defender::remembered_opinion(&mut report, path, disabled) };
     (report, outcome)
 }
 

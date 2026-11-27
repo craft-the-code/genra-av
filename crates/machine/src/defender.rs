@@ -76,8 +76,10 @@ pub fn wants(report: &Report, path: &Path) -> bool {
         && !report.allowed
         && !report.should_quarantine()
         && ASKED.contains(&ext.as_str())
-        // A document renamed to .zip or .exe is still the user's document.
-        && report.kind != genra_av_core::extract::Kind::Ole
+        // An old-format document renamed to .exe is still the user's document; installers
+        // (.msi, .msp) are compound files too. Renamed new-format documents and PDFs are caught
+        // by content in [`second_opinion`].
+        && (report.kind != genra_av_core::extract::Kind::Ole || matches!(ext.as_str(), "msi" | "msp"))
         && report.vba_modules.is_empty()
         && !report.findings.iter().any(|f| f.rule == RULE || f.rule.starts_with("defender."))
         && path.is_absolute()
@@ -101,10 +103,28 @@ pub enum Outcome {
 /// Asks Defender when [`wants`] says so and Defender is on, and adds what it said to the report.
 /// The outcome lets a caller bound how many files, and how much time, one scan spends on it.
 pub fn second_opinion(report: &mut Report, path: &Path, disabled: &[String]) -> Outcome {
+    opinion(report, path, disabled, true)
+}
+
+/// [`second_opinion`] from this session's memory only: Defender is not run. For files after a
+/// scan's budget is spent, which still get an answer Defender already gave.
+pub fn remembered_opinion(report: &mut Report, path: &Path, disabled: &[String]) -> Outcome {
+    opinion(report, path, disabled, false)
+}
+
+/// A Word, Excel or PowerPoint file (new format, by its parts) or a PDF, whatever its name.
+fn users_document(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return true };
+    bytes.starts_with(b"%PDF") || genra_av_core::extract::is_office_package(&bytes)
+}
+
+fn opinion(report: &mut Report, path: &Path, disabled: &[String], run: bool) -> Outcome {
     if !enabled(disabled) || !wants(report, path) {
         return Outcome::NotAsked;
     }
-    let (said, outcome) = match ask(path, &report.sha256) {
+    let asked = if run { ask(path, &report.sha256, || users_document(path)) } else { remembered(&report.sha256) };
+    let (said, outcome) = match asked {
+        Asked::Skipped => return Outcome::NotAsked,
         Asked::Unavailable => return Outcome::Unavailable,
         Asked::Failed => return Outcome::Failed,
         Asked::Said(s, ran) => (s, if ran { Outcome::Answered } else { Outcome::Remembered }),
@@ -236,6 +256,8 @@ fn parse_status(json: &str) -> Option<String> {
 /// What [`ask`] got.
 #[cfg_attr(not(windows), allow(dead_code))]
 enum Asked {
+    /// The file turned out to be the user's own document: not sent.
+    Skipped,
     Unavailable,
     Failed,
     /// The answer, and whether Defender ran for it (false: remembered).
@@ -287,14 +309,20 @@ mod imp {
         found
     }
 
-    pub(super) fn ask(path: &Path, sha256: &str) -> Asked {
-        {
-            let g = SAID.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((at, s)) = g.as_ref().and_then(|m| m.get(sha256)) {
-                if at.elapsed() < ANSWER_TTL {
-                    return Asked::Said(s.clone(), false);
-                }
-            }
+    pub(super) fn remembered(sha256: &str) -> Asked {
+        let g = SAID.lock().unwrap_or_else(|e| e.into_inner());
+        match g.as_ref().and_then(|m| m.get(sha256)) {
+            Some((at, s)) if at.elapsed() < ANSWER_TTL => Asked::Said(s.clone(), false),
+            _ => Asked::Skipped,
+        }
+    }
+
+    pub(super) fn ask(path: &Path, sha256: &str, users_document: impl FnOnce() -> bool) -> Asked {
+        if let r @ Asked::Said(..) = remembered(sha256) {
+            return r;
+        }
+        if users_document() {
+            return Asked::Skipped;
         }
         let Some(mp) = mpcmdrun() else { return Asked::Unavailable };
         let (Some(mp), Some(file)) = (mp.to_str(), path.to_str()) else { return Asked::Failed };
@@ -306,15 +334,20 @@ mod imp {
 }
 
 #[cfg(windows)]
-use imp::ask;
+use imp::{ask, remembered};
 
 #[cfg(not(windows))]
-fn ask(_path: &Path, _sha256: &str) -> Asked {
+fn ask(_path: &Path, _sha256: &str, _users_document: impl FnOnce() -> bool) -> Asked {
     Asked::Unavailable
 }
 
-/// A bounded run of second opinions for one scan: at most [`Budget::FILES`] files and
-/// [`Budget::TIME`] in all, none after Defender failed once or turned out to be off, none once
+#[cfg(not(windows))]
+fn remembered(_sha256: &str) -> Asked {
+    Asked::Skipped
+}
+
+/// A bounded run of second opinions for one scan: at most [`Budget::FILES`] files, none started
+/// after [`Budget::TIME`] (one already running may take its own 60 s timeout), none after Defender failed once or turned out to be off, none once
 /// the user pressed "Dừng".
 pub struct Budget {
     started: std::time::Instant,
@@ -449,6 +482,9 @@ mod tests {
         for asked in ["a.exe", "a.lnk", "a.ps1", "a.zip", "a.iso"] {
             assert!(wants(&report(vec![suspicious("x")]), Path::new(&at(asked))), "{asked}");
         }
+        let mut msi = report(vec![suspicious("x")]);
+        msi.kind = genra_av_core::extract::Kind::Ole;
+        assert!(wants(&msi, Path::new(&at("setup.msi"))), "installers are compound files too");
         let mut renamed = report(vec![suspicious("x")]);
         renamed.kind = genra_av_core::extract::Kind::Ole;
         assert!(!wants(&renamed, Path::new(&at("bao-cao.exe"))), "a document renamed to .exe");
@@ -470,6 +506,31 @@ mod tests {
         assert_eq!(parse_status(r#"{"av":false,"mode":"Normal"}"#), None);
         assert_eq!(parse_status("{}"), None);
         assert_eq!(parse_status(""), None);
+    }
+
+    #[test]
+    fn renamed_pdfs_and_new_format_documents_are_found_by_content() {
+        let dir = std::env::temp_dir().join(format!("genra-defender-doc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pdf = dir.join("hoa-don.exe");
+        std::fs::write(&pdf, b"%PDF-1.7\n...").unwrap();
+        assert!(users_document(&pdf));
+        let docx = dir.join("bao-cao.zip");
+        {
+            use std::io::Write;
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&docx).unwrap());
+            let o = zip::write::SimpleFileOptions::default();
+            for (n, b) in [("[Content_Types].xml", &b"<Types/>"[..]), ("word/document.xml", b"<w:document/>")] {
+                z.start_file(n, o).unwrap();
+                z.write_all(b).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        assert!(users_document(&docx));
+        let prog = dir.join("setup.exe");
+        std::fs::write(&prog, b"MZ\x90\x00").unwrap();
+        assert!(!users_document(&prog));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -511,7 +572,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }
-        let got = imp::ask(&p, &"e".repeat(64));
+        let got = imp::ask(&p, &"e".repeat(64), || false);
         let gone = !p.exists();
         let _ = std::fs::remove_dir_all(&dir);
         match got {

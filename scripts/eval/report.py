@@ -103,6 +103,9 @@ def main() -> None:
         print("disk images and archives, as in the app); every other column is Genra alone. Real-time protection was")
         print("off on the runner: on a user's machine it would already catch many of these when Genra reads them, so")
         print("the last column is an upper bound on what this layer adds.")
+    print("\nSamples are named `<sha256>.<type>` since 27/11/2026 (before: no extension), so the checks that")
+    print("read the name (scripts, shortcuts, archives) see what a user's machine sees; numbers before that date")
+    print("are not comparable for those types.")
     print(f"\nClean files scanned: {clean_n}; false positives: **{len(fp)}**.")
     for p, rules in fp[:50]:
         print(f"- `{p}`: {', '.join(rules)}")
@@ -114,7 +117,7 @@ def main() -> None:
     if missed_families:
         print("\nMost-missed families:", ", ".join(f"{k} ({v})" for k, v in missed_families.most_common(10)))
     if a.json:
-        json.dump({"by_type": by_type, "total": total, "defender": asked_defender, "clean": clean_n, "false_positives": len(fp), "yara_false_positive_rules": dict(yara_fp)}, open(a.json, "w"), indent=1)
+        json.dump({"by_type": by_type, "total": total, "defender": asked_defender, "naming": "sha256.type", "clean": clean_n, "false_positives": len(fp), "yara_false_positive_rules": dict(yara_fp)}, open(a.json, "w"), indent=1)
 
 
 if __name__ == "__main__":

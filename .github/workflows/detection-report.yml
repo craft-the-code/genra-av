@@ -152,11 +152,11 @@ jobs:
           # Office files without macros, made fresh so nothing in them is ours or borrowed.
           python -m pip install --quiet python-docx==1.1.2 openpyxl==3.1.5
           python scripts/eval/make_clean_office.py clean/office 200
-          ./target/release/genra-av.exe scan $PACK_FLAGS ${{ inputs.defender && '--defender' || '' }} --json clean/office > clean-office.jsonl || true
-          ./target/release/genra-av.exe scan $PACK_FLAGS ${{ inputs.defender && '--defender' || '' }} --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
+          ./target/release/genra-av.exe scan $PACK_FLAGS --json clean/office > clean-office.jsonl || true
+          ./target/release/genra-av.exe scan $PACK_FLAGS --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
           # Shortcuts and scripts Windows and installed programs ship: the false-positive check for
           # the shortcut and script heuristics.
-          ./target/release/genra-av.exe scan $PACK_FLAGS ${{ inputs.defender && '--defender' || '' }} --json \
+          ./target/release/genra-av.exe scan $PACK_FLAGS --json \
             "C:/ProgramData/Microsoft/Windows/Start Menu" "C:/Users/Public/Desktop" \
             "C:/Windows/System32/WindowsPowerShell/v1.0/Modules" "C:/Program Files/WindowsPowerShell/Modules" \
             > clean-scripts.jsonl 2>/dev/null || true

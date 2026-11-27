@@ -188,8 +188,9 @@ fn run() -> Result<bool> {
                 // A validly signed program is never quarantined on a hash match alone (ADR 0004).
                 genra_av_machine::rails::signed_file_rail(&mut hit.report, &hit.path);
                 // Windows Defender's opinion on what Genra calls suspicious (ADR 0004, layer 4).
+                let disabled = pack.as_ref().map(|p| p.disabled.as_slice()).unwrap_or(&[]);
                 if budget.open(None) {
-                    budget.record(genra_av_machine::defender::second_opinion(&mut hit.report, &hit.path, pack.as_ref().map(|p| p.disabled.as_slice()).unwrap_or(&[])));
+                    budget.record(genra_av_machine::defender::second_opinion(&mut hit.report, &hit.path, disabled));
                 }
             }
             for hit in &hits {
