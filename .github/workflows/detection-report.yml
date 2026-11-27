@@ -77,7 +77,7 @@ jobs:
           # Files only: folders keep their execute bit so they can still be walked and deleted.
           find "$s" -type f -exec chmod a-x {} +
           # The scan's exit code says "something found"; an empty result is the failure to catch.
-          ./target/release/genra-av scan --rules pack/pack.json --json "$s" > malware.jsonl || true
+          ./target/release/genra-av scan --rules pack/pack.json --pubkey keys/pack-1.pub --json "$s" > malware.jsonl || true
           cp "$RUNNER_TEMP/zips/manifest.json" manifest.json
           rm -rf "$s" "$RUNNER_TEMP/zips"
           echo "scanned: $(wc -l < malware.jsonl)"
@@ -92,6 +92,8 @@ jobs:
 
   clean:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
     timeout-minutes: 45
     defaults:
       run:
@@ -108,7 +110,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release download rules-latest -p pack.json -p pack.json.sig -D pack
-          python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json")).get("hash_sets", [])]' > lists
+          python -c 'import json; [print(s["file"]) for s in json.load(open("pack/pack.json", encoding="utf-8")).get("hash_sets", [])]' | tr -d '\r' > lists
           grep -qvE '^[A-Za-z0-9._-]+\.bin$' lists && { echo "odd hash list name"; exit 1; }
           while read -r f; do gh release download rules-latest -p "$f" -D pack; done < lists
       - name: Clean corpus
@@ -117,8 +119,8 @@ jobs:
           # Office files without macros, made fresh so nothing in them is ours or borrowed.
           python -m pip install --quiet python-docx==1.1.2 openpyxl==3.1.5
           python scripts/eval/make_clean_office.py clean/office 200
-          ./target/release/genra-av.exe scan --rules pack/pack.json --json clean/office > clean-office.jsonl || true
-          ./target/release/genra-av.exe scan --rules pack/pack.json --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
+          ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json clean/office > clean-office.jsonl || true
+          ./target/release/genra-av.exe scan --rules pack/pack.json --pubkey keys/pack-1.pub --json "C:/Windows/System32" > clean-system32.jsonl 2>/dev/null || true
           wc -l clean-*.jsonl
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
