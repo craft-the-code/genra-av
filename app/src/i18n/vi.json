@@ -5,7 +5,6 @@
   "nav.scan": "Kiểm tra tệp",
   "nav.machine": "Máy của bạn",
   "nav.settings": "Cài đặt",
-  "footer.guard": "Canh gác thư mục: sắp có",
   "footer.rules.updated": "Luật cập nhật {when}",
   "footer.rules.bundled": "Đang dùng luật đi kèm ứng dụng",
   "footer.rules.loading": "Đang đọc bộ luật…",
@@ -271,7 +270,6 @@
   "machine.startup.more": "Xem cả {n} mục ổn",
   "machine.startup.less": "Chỉ xem mục cần chú ý",
   "machine.startup.fine": "{n} mục khởi động cùng máy, tất cả đều ổn.",
-  "machine.guard.soon": "Canh gác liên tục: sắp có",
   "machine.guard.usb.now": "đang cắm: {names}",
   "machine.guard.usb.none": "chưa cắm ổ nào",
   "machine.guard.missing": "chưa thấy thư mục này trên máy",
@@ -319,5 +317,15 @@
   "message.close": "Đóng",
   "settings.shell_menu": "Mục “Kiểm tra bằng Genra AV” khi bấm chuột phải vào tệp",
   "settings.shell_menu.text": "Bấm chuột phải vào một tệp trong File Explorer để kiểm tra ngay. Trên Windows 11, mục này nằm trong “Show more options”.",
-  "settings.shell_menu.error": "Chưa thêm được vào menu: {detail}"
+  "settings.shell_menu.error": "Chưa thêm được vào menu: {detail}",
+  "footer.guard.loading": "Canh gác thư mục…",
+  "footer.guard.on": "Đang canh gác",
+  "footer.guard.off": "Canh gác đang tắt",
+  "footer.guard.usb": "Đang quét USB {drive}",
+  "machine.guard.on": "Đang canh gác",
+  "machine.guard.off": "Đang tắt",
+  "machine.guard.usb.on": "Quét khi cắm",
+  "machine.guard.scanning": "Đang quét",
+  "settings.guard": "Canh gác thư mục",
+  "settings.guard.text": "Khi Genra đang mở, mỗi tệp mới trong Downloads và Zalo được kiểm tra ngay, USB được quét khi cắm vào. Không thấy gì thì Genra im lặng."
 }

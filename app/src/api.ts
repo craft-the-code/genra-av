@@ -137,7 +137,10 @@ export interface StartupItem {
 }
 export interface GuardPlace { kind: "downloads" | "zalo" | "usb"; paths: string[] }
 export interface MachineOverview { health: HealthItem[]; startup: StartupItem[]; guard: GuardPlace[] }
-export interface Settings { send_hashes: boolean; shell_menu: boolean }
+export interface Settings { send_hashes: boolean; shell_menu: boolean; guard: boolean }
+/** "Canh gác": the folders watched now, the drives plugged in, a drive being scanned. */
+export interface GuardStatus { on: boolean; folders: string[]; usb: string[]; scanning: string | null }
+export interface GuardUsb { drive: string; done: boolean; hits: number }
 /** "Kiểm tra bằng Genra AV" in the Explorer menu (Windows only). */
 export interface ShellMenu { supported: boolean; on: boolean; error: string | null }
 
@@ -174,6 +177,8 @@ export const installUpdate = () => invoke<void>("install_update");
 export const getSettings = () => invoke<Settings>("get_settings");
 export const shellMenu = (lang: string) => invoke<ShellMenu>("shell_menu", { lang });
 export const setShellMenu = (on: boolean, lang: string) => invoke<ShellMenu>("set_shell_menu", { on, lang });
+export const guardStatus = () => invoke<GuardStatus>("guard_status");
+export const setGuard = (on: boolean) => invoke<GuardStatus>("set_guard", { on });
 export const setSendHashes = (on: boolean) => invoke<Settings>("set_send_hashes", { on });
 export const reportFalsePositive = (sha256: string, ruleId: string | null, note: string | null) =>
   invoke<void>("report_false_positive", { sha256, ruleId, note });
@@ -185,4 +190,7 @@ export const onRepairProgress = (f: (p: RepairProgress) => void): Promise<Unlist
 export const onRulesChanged = (f: () => void): Promise<UnlistenFn> => listen("rules-changed", () => f());
 /** A file sent to the running Genra ("Kiểm tra bằng Genra AV" while the window is open). */
 export const onOpenPath = (f: (path: string) => void): Promise<UnlistenFn> => listen<string>("open-path", (e) => f(e.payload));
+export const onGuardHit = (f: (r: ScanResult) => void): Promise<UnlistenFn> => listen<ScanResult>("guard-hit", (e) => f(e.payload));
+export const onGuardStatus = (f: (s: GuardStatus) => void): Promise<UnlistenFn> => listen<GuardStatus>("guard-status", (e) => f(e.payload));
+export const onGuardUsb = (f: (u: GuardUsb) => void): Promise<UnlistenFn> => listen<GuardUsb>("guard-usb", (e) => f(e.payload));
 export const onDropped = (f: (paths: string[]) => void): Promise<UnlistenFn> => listen<string[]>("dropped", (e) => f(e.payload));

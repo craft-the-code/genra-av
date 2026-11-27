@@ -13,6 +13,9 @@ pub struct Settings {
     /// Windows: "Kiểm tra bằng Genra AV" in the Explorer right-click menu. On unless switched off.
     #[serde(default = "yes")]
     pub shell_menu: bool,
+    /// "Canh gác": watch Downloads, Zalo and USB sticks while Genra runs. On unless switched off.
+    #[serde(default = "yes")]
+    pub guard: bool,
 }
 
 fn yes() -> bool {
@@ -21,7 +24,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { send_hashes: false, shell_menu: true }
+        Settings { send_hashes: false, shell_menu: true, guard: true }
     }
 }
 
@@ -43,7 +46,7 @@ mod tests {
     #[test]
     fn older_settings_files_keep_the_menu_on() {
         let s: Settings = serde_json::from_str(r#"{"send_hashes":true}"#).unwrap();
-        assert!(s.send_hashes && s.shell_menu);
+        assert!(s.send_hashes && s.shell_menu && s.guard);
         assert!(Settings::default().shell_menu && !Settings::default().send_hashes);
     }
 }

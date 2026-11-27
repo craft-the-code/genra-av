@@ -182,7 +182,7 @@ pub struct StartupView {
     pub can_disable: bool,
 }
 
-/// One place the quick scan looks at; the live guard is not built yet.
+/// One place the quick scan and the folder guard (guard.rs) look at.
 #[derive(Debug, Clone, Serialize)]
 pub struct GuardPlace {
     /// `downloads`, `zalo` or `usb`.

@@ -5,7 +5,6 @@
   "nav.scan": "Check a file",
   "nav.machine": "Your computer",
   "nav.settings": "Settings",
-  "footer.guard": "Folder guard: coming soon",
   "footer.rules.updated": "Rules updated {when}",
   "footer.rules.bundled": "Using the rules built into the app",
   "footer.rules.loading": "Reading the rules…",
@@ -271,7 +270,6 @@
   "machine.startup.more": "Show all {n} items that are fine",
   "machine.startup.less": "Only items that need a look",
   "machine.startup.fine": "{n} items start with the computer, all fine.",
-  "machine.guard.soon": "Continuous guard: coming soon",
   "machine.guard.usb.now": "plugged in: {names}",
   "machine.guard.usb.none": "none plugged in",
   "machine.guard.missing": "this folder is not on the computer",
@@ -319,5 +317,15 @@
   "message.close": "Close",
   "settings.shell_menu": "“Check with Genra AV” when you right-click a file",
   "settings.shell_menu.text": "Right-click a file in File Explorer to check it at once. On Windows 11 it is under “Show more options”.",
-  "settings.shell_menu.error": "Could not add it to the menu: {detail}"
+  "settings.shell_menu.error": "Could not add it to the menu: {detail}",
+  "footer.guard.loading": "Folder guard…",
+  "footer.guard.on": "Guarding",
+  "footer.guard.off": "Guard is off",
+  "footer.guard.usb": "Scanning USB {drive}",
+  "machine.guard.on": "Guarding",
+  "machine.guard.off": "Off",
+  "machine.guard.usb.on": "Scanned when plugged in",
+  "machine.guard.scanning": "Scanning",
+  "settings.guard": "Folder guard",
+  "settings.guard.text": "While Genra is open, every new file in Downloads and Zalo is checked at once, and a USB stick is scanned when plugged in. If nothing is found, Genra stays quiet."
 }

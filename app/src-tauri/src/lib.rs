@@ -3,6 +3,7 @@
 //! explicit "báo nhầm" report, or a detected file's hash when the user turned that on (Q8).
 
 mod allow;
+mod guard;
 mod history;
 pub mod machine;
 mod packs;
@@ -53,6 +54,11 @@ struct AppState {
     /// Bumped by every "Dọn sạch giúp tôi": a plan computed before the press but finished after it
     /// is not kept (the press planned for itself, and a later press must not run the older plan).
     plan_gen: std::sync::atomic::AtomicU64,
+    /// "Canh gác" on (the guard thread follows it) and what it watches now.
+    guard_on: AtomicBool,
+    guard: Mutex<guard::Status>,
+    /// The window's language, for texts Rust shows itself (notifications, the Explorer menu).
+    lang: Mutex<String>,
 }
 
 /// A plan computed for the threat screen, with the file's hash when it was made.
@@ -89,6 +95,9 @@ impl AppState {
         if let Ok(mut h) = self.history.lock() {
             let _ = h.push(e);
         }
+    }
+    fn lang(&self) -> String {
+        self.lang.lock().map(|l| l.clone()).unwrap_or_else(|_| "vi".into())
     }
     /// The next visit to "Máy của bạn" reads the machine again (something was changed).
     fn invalidate_overview(&self) {
@@ -182,6 +191,14 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
+    record_check(&app, &result);
+    Ok(result)
+}
+
+/// A checked file in the history (by hand or by the folder guard), and its hash sent when the
+/// user turned that on.
+fn record_check(app: &AppHandle, result: &ScanResult) {
+    let st = app.state::<AppState>();
     let top = result.report.findings.iter().max_by_key(|f| f.severity);
     st.record(Entry {
         id: util::new_id(),
@@ -200,9 +217,8 @@ async fn scan_file(app: AppHandle, path: String) -> Result<ScanResult, String> {
         items: Vec::new(),
     });
     if result.report.verdict.is_some_and(|v| v >= Severity::Suspicious) {
-        send_detection(&app, &result.report.sha256, top.map(|f| f.rule.clone()));
+        send_detection(app, &result.report.sha256, top.map(|f| f.rule.clone()));
     }
-    Ok(result)
 }
 
 /// What the window hears while a repair runs: `planning` while Genra looks for the worm and
@@ -789,7 +805,30 @@ fn sync_shell_menu(st: &AppState, lang: &str) -> ShellMenu {
 /// setting, with the label in the window's language.
 #[tauri::command]
 fn shell_menu(st: St, lang: String) -> ShellMenu {
+    if let Ok(mut l) = st.lang.lock() {
+        *l = if lang == "en" { "en".into() } else { "vi".into() };
+    }
     sync_shell_menu(&st, &lang)
+}
+
+/// What "Canh gác" watches now.
+#[tauri::command]
+fn guard_status(st: St) -> guard::Status {
+    let mut s = st.guard.lock().map(|s| s.clone()).unwrap_or_default();
+    s.on = st.guard_on.load(Ordering::SeqCst);
+    s
+}
+
+/// The "Canh gác" switch in Cài đặt.
+#[tauri::command]
+fn set_guard(st: St, on: bool) -> Result<guard::Status, String> {
+    {
+        let mut s = st.settings.lock().map_err(|e| e.to_string())?;
+        s.guard = on;
+        s.save(&st.data).map_err(|e| e.to_string())?;
+    }
+    st.guard_on.store(on, Ordering::SeqCst);
+    Ok(guard_status(st))
 }
 
 /// The switch in Cài đặt.
@@ -983,6 +1022,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data = genra_av_core::paths::data_dir().or_else(|_| app.path().app_data_dir())?;
@@ -993,12 +1033,16 @@ pub fn run() {
             if let Ok(j) = genra_av_machine::Journal::open(&data) {
                 let _ = j.purge_expired();
             }
+            let settings = Settings::load(&data);
             let state = AppState {
                 rules: RwLock::new(Arc::new(packs::load(&data))),
                 status: Mutex::new(packs::read_status(&data)),
                 allow: Mutex::new(Allow::default()),
                 history: Mutex::new(History::load(&data)),
-                settings: Mutex::new(Settings::load(&data)),
+                guard_on: AtomicBool::new(settings.guard),
+                guard: Mutex::new(guard::Status::default()),
+                lang: Mutex::new("vi".into()),
+                settings: Mutex::new(settings),
                 quick_running: AtomicBool::new(false),
                 quick_stop: AtomicBool::new(false),
                 machine: Box::new(machine::Real::new(&data)),
@@ -1011,6 +1055,7 @@ pub fn run() {
             app.manage(state);
             #[cfg(debug_assertions)]
             e2e_script(app.handle());
+            guard::start(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -1061,6 +1106,8 @@ pub fn run() {
             set_send_hashes,
             shell_menu,
             set_shell_menu,
+            guard_status,
+            set_guard,
             report_false_positive
         ])
         .run(tauri::generate_context!())
