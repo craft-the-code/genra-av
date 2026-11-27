@@ -6,6 +6,14 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 ## [Unreleased]
 
 ### Added
+- Graded hash reputation (ADR 0004, step 1b): MalwareBazaar hashes of listed commodity families
+  (`rules/families.json`), confirmed by at least two other analysis engines and listed for 48 hours,
+  go to a trusted list that quarantines without asking; the signing job re-checks every addition
+  with MalwareBazaar before it signs, and the trusted list can only grow (removals through the
+  allow list). Remote-support tools that MalwareBazaar also lists are never trusted.
+- Safety rail: a program with a valid Windows digital signature is never quarantined on a hash
+  match alone; it is shown as suspicious and the user decides.
+- Weekly detection report (MalwareBazaar samples per file type, clean-corpus false positives).
 - Detection: Excel 4.0 (XLM) macro sheets in .xls (also embedded in Word files) and .xlsx/.xlsm, and
   Auto_Open-style names when a macro sheet or VBA is there to run (`builtin.xlm_macro`,
   `builtin.xlm_autorun`); documents that fetch a template, frame or linked OLE object from the web, an

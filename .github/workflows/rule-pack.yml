@@ -56,11 +56,20 @@ jobs:
             while read -r f; do gh release download rules-latest -p "$f" -D prev; done < prev.lists
             # Signature again, plus each list against the digest and count in the signed pack.
             ./target/release/genra-av rules verify prev/pack.json --pubkey keys/pack-1.pub --any-expiry
-            while read -r f; do ./target/release/genra-av hashes dump "prev/$f"; done < prev.lists > prev.txt
+            # Feed lists and the trusted list are kept apart: only graded hashes may be trusted.
+            python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", []) if not s.get("trusted")]' > prev.feeds
+            python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", []) if s.get("trusted")]' > prev.trusted
+            while read -r f; do ./target/release/genra-av hashes dump "prev/$f"; done < prev.feeds > prev.txt
+            while read -r f; do ./target/release/genra-av hashes dump "prev/$f"; done < prev.trusted > prev-trusted.txt
+            # Pending candidates for grading. Unsigned and only a hint: the signing job re-checks
+            # every trusted addition itself, so a tampered state can only delay a promotion.
+            gh release download rules-latest -p grade-state.json -D . 2>/dev/null || echo '{}' > grade-state.json
             python3 -c 'import json; print(json.load(open("prev/pack.json"))["version"])' > prev.version
           elif grep -q "release not found" <<<"$view"; then
             echo "no rules-latest release yet: starting from an empty list"
             : > prev.txt
+            : > prev-trusted.txt
+            echo '{}' > grade-state.json
             echo 0 > prev.version
           else
             echo "$view"
@@ -81,6 +90,14 @@ jobs:
           echo "recent: $(wc -l < recent.txt) hashes"
           test -s recent.txt
 
+      - name: Grade (families, other engines, 48 hours)
+        env:
+          ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
+        run: |
+          python3 scripts/hash_grade.py candidates recent.csv rules/families.json grade-state.json
+          python3 scripts/hash_grade.py promote rules/families.json grade-state.json prev-trusted.txt trusted.txt
+          ./target/release/genra-av hashes build trusted.txt trusted.bin
+
       - name: Merge and build the unsigned pack
         run: |
           sort -u prev.txt recent.txt > merged.txt
@@ -89,7 +106,8 @@ jobs:
           echo "total: $total hashes (previous $prev)"
           [ "$total" -ge "$prev" ] || { echo "the list would shrink"; exit 1; }
           ./target/release/genra-av hashes build merged.txt merged.bin
-          echo "version $(python3 scripts/build-pack.py rules/base.json merged.bin "$(cat prev.version)" out)"
+          echo "version $(python3 scripts/build-pack.py rules/base.json merged.bin trusted.bin "$(cat prev.version)" out)"
+          cp grade-state.json out/grade-state.json
           ./target/release/genra-av scan --rules out/pack.json --unsigned README.md
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -127,13 +145,24 @@ jobs:
           if view=$(gh release view rules-latest --json tagName 2>&1); then
             gh release download rules-latest -p pack.json -p pack.json.sig -D prev
             scripts/pack-sig.sh verify prev/pack.json keys/pack-1.pub
-            python3 scripts/check-pack.py rules/base.json out/pack.json prev/pack.json
+            # The previous lists, so the checker can read the previous trusted set (each is
+            # checked against the digest in the signed pack before use).
+            python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]' > prev.lists
+            grep -qvE '^[A-Za-z0-9._-]+\.bin$' prev.lists && { echo "odd hash list name"; exit 1; }
+            while read -r f; do gh release download rules-latest -p "$f" -D prev; done < prev.lists
+            python3 scripts/check-pack.py rules/base.json out/pack.json prev/pack.json --additions additions.txt
           elif grep -q "release not found" <<<"$view"; then
-            python3 scripts/check-pack.py rules/base.json out/pack.json
+            python3 scripts/check-pack.py rules/base.json out/pack.json --additions additions.txt
           else
             echo "$view"
             exit 1
           fi
+
+      - name: Re-check every new trusted hash with MalwareBazaar
+        env:
+          ABUSECH_AUTH_KEY: ${{ secrets.ABUSECH_AUTH_KEY }}
+        # Our code from this commit, standard library only; the build job's grading is not trusted.
+        run: python3 scripts/hash_grade.py verify rules/families.json additions.txt
 
       - name: Sign with openssl
         env:
@@ -142,7 +171,8 @@ jobs:
 
       - name: Publish (hash list, then pack.json, then the signature)
         run: |
-          bin=$(python3 -c 'import json; print(json.load(open("out/pack.json"))["hash_sets"][0]["file"])')
+          bin=$(python3 -c 'import json; print([s["file"] for s in json.load(open("out/pack.json"))["hash_sets"] if not s.get("trusted")][0])')
+          tbin=$(python3 -c 'import json; print("".join(s["file"] for s in json.load(open("out/pack.json"))["hash_sets"] if s.get("trusted")))')
           keep=""
           if [ -f prev/pack.json ]; then
             keep=$(python3 -c 'import json; [print(s["file"]) for s in json.load(open("prev/pack.json")).get("hash_sets", [])]')
@@ -155,13 +185,16 @@ jobs:
           # pack.json with the old signature, which fails verification, and it keeps its
           # previous pack.
           gh release upload rules-latest --clobber "out/$bin"
+          if [ -n "$tbin" ]; then gh release upload rules-latest --clobber "out/$tbin"; fi
           gh release upload rules-latest --clobber out/pack.json
           gh release upload rules-latest --clobber out/pack.json.sig
+          # Grading hints for the next run (unsigned; clients never read it).
+          gh release upload rules-latest --clobber out/grade-state.json
           # Keep the new list and the previous one (clients mid-download); drop older lists.
           gh release view rules-latest --json assets -q '.assets[].name' | while read -r name; do
             case "$name" in
-              malwarebazaar*.bin | malwarebazaar*.txt.gz)
-                if [ "$name" != "$bin" ] && ! grep -qxF "$name" <<<"$keep"; then
+              malwarebazaar*.bin | malwarebazaar*.txt.gz | trusted-*.bin)
+                if [ "$name" != "$bin" ] && [ "$name" != "$tbin" ] && ! grep -qxF "$name" <<<"$keep"; then
                   gh release delete-asset rules-latest "$name" -y
                 fi
                 ;;

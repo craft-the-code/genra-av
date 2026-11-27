@@ -31,8 +31,9 @@ Kangatang worm with no help (usability-audit.md: 5/5 testers, under 60 s, no que
 Catch and clean the common malware people get, not only Office macros, while staying light.
 
 - [x] Excel 4.0 macros, remote templates, hidden folders on USB sticks (PR #20).
-- [ ] 1. Graded hash reputation (trusted families quarantine) and the measurement harness: detection
-      rate per file type, false positives on a clean corpus, published per release.
+- [x] 1a. Measurement harness: weekly report, first run 27/11: 570 recent samples, 43 % caught
+      (13 % without hash lists), 3 % rated malware; 0 false positives on 21 713 clean files.
+- [ ] 1b. Graded hash reputation: trusted families quarantine, re-checked at signing, signed-file rail.
 - [ ] 2. Inside archives; scripts, shortcuts, double extensions; USB worm pattern, and USB
       disinfection that unhides the real folders.
 - [ ] 2b. Disinfection on the machine: startup entries, running process, Defender exclusions.

@@ -52,10 +52,18 @@ fn probe(dir: &Path, waiting: impl FnOnce()) {
     }
 }
 
-/// Hash-list hits on public feeds are "Đáng ngờ" only: they never move a file by themselves.
+/// Hits on public hash feeds alone are "Đáng ngờ": they never move a file by themselves. A hit on
+/// the graded, trusted list is not "hash only" in this sense: it is malware (ADR 0004).
 pub fn hash_only(r: &genra_av_core::Report) -> bool {
     let serious: Vec<_> = r.findings.iter().filter(|f| f.severity >= Severity::Suspicious).collect();
-    !serious.is_empty() && serious.iter().all(|f| f.rule.starts_with("hash."))
+    !serious.is_empty() && serious.iter().all(|f| f.rule.starts_with("hash.") && !f.auto_quarantine)
+}
+
+/// The report as the app acts on it: scanned, then the safety rails (a validly signed program is
+/// never quarantined on a hash match alone).
+pub fn checked(mut report: genra_av_core::Report, path: &Path) -> genra_av_core::Report {
+    genra_av_machine::rails::signed_file_rail(&mut report, path);
+    report
 }
 
 /// What to walk and how: the folders, their depth and skips, and the stop flag.
@@ -101,8 +109,9 @@ pub fn run_job(data: &Path, rules: &Loaded, job: &Job, emit: impl Fn(Progress)) 
         .into_iter()
         .map(|h| {
             let size = std::fs::metadata(&h.path).map(|m| m.len()).unwrap_or(0);
-            let hash_only = hash_only(&h.report);
-            ScanResult { name: crate::util::file_name(&h.path), path: h.path.to_string_lossy().into_owned(), size, hash_only, report: h.report }
+            let report = checked(h.report, &h.path);
+            let hash_only = hash_only(&report);
+            ScanResult { name: crate::util::file_name(&h.path), path: h.path.to_string_lossy().into_owned(), size, hash_only, report }
         })
         .collect();
     QuickResult {

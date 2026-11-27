@@ -36,7 +36,8 @@ quarantine anything.
   quarantined on every PC. A hash is `trusted` (may quarantine) only when **all** of these hold:
   - its entry names a family on a curated list of commodity families (AgentTesla, Formbook, Remcos,
     AsyncRAT, RedLine, Lumma, Emotet, QakBot, njRAT, …, kept in `rules/families.json`);
-  - independent engines agree: MalwareBazaar's vendor results show detections by at least 3 engines;
+  - independent engines agree: at least 2 analysis engines in the entry's vendor results (ReversingLabs,
+    Triage, ANY.RUN, …) call it malicious, read only from clear verdict fields and scores;
   - it has been listed for at least 48 hours without being removed or reported as a false positive.
   Everything else stays `suspicious`. The CI writes two lists: `trusted-<v>.bin` and `feeds-<v>.bin`,
   and the signing job recomputes the trusted list from the same inputs with the code on `main`

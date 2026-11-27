@@ -48,8 +48,10 @@ pub struct HashSetRef {
     pub severity: Severity,
     /// Where the hashes come from, e.g. "abuse.ch MalwareBazaar (CC0)".
     pub source: String,
-    /// Only a list curated by us (every entry reviewed) is `trusted`; only then may a hash match
-    /// alone move a file into quarantine. Feeds such as MalwareBazaar stay `false`.
+    /// Only a graded list is `trusted` (scripts/hash_grade.py: a listed commodity family,
+    /// corroborated by other engines, 48 hours old, re-checked by the signing job); only then may a
+    /// hash match alone move a file into quarantine, and never a validly signed program (the
+    /// signed-file rail). Raw feeds such as MalwareBazaar stay `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub trusted: bool,
     /// Number of digests in the list, checked on load; lets the publisher refuse a shrinking list.
