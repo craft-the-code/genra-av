@@ -38,7 +38,7 @@ pub(crate) fn now() -> u64 {
 /// `bytes` random bytes as hex.
 pub(crate) fn random_hex(bytes: usize) -> anyhow::Result<String> {
     let mut b = vec![0u8; bytes];
-    getrandom::getrandom(&mut b).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
+    getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
     Ok(hex::encode(b))
 }
 

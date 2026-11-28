@@ -5,6 +5,11 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+### Changed
+- Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and
+  ed25519-dalek 3 (rule pack signatures unchanged), with the latest patch releases elsewhere; vite 8.4;
+  backend on TypeScript 7 and the current wrangler.
+
 ## [0.2.0] - 2026-11-27
 
 ### Added

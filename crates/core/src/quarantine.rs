@@ -43,7 +43,7 @@ fn check_id(id: &str) -> Result<()> {
 /// 128 random bits, so two items never share an id, even for identical files in one second.
 fn random_id() -> Result<String> {
     let mut b = [0u8; 16];
-    getrandom::getrandom(&mut b).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
+    getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("no system randomness: {e}"))?;
     Ok(hex::encode(b))
 }
 
