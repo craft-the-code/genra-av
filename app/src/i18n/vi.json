@@ -307,5 +307,14 @@
   "done.text.partial": "Windows chưa cho Genra làm hết. Khởi động lại máy rồi quét lại một lần để xong.",
   "result.plan.loading": "Genra đang xem cụ thể cần dọn những gì…",
   "result.plan.more": "và {n} bước khác",
-  "result.plan.excel": "Excel đang mở một tệp cần dọn: Genra sẽ nhờ bạn đóng Excel trước."
+  "result.plan.excel": "Excel đang mở một tệp cần dọn: Genra sẽ nhờ bạn đóng Excel trước.",
+  "message.compose": "Soạn lời nhắn",
+  "message.title": "Lời nhắn cho người gửi tệp",
+  "message.hint": "Sửa nếu muốn, rồi sao chép và dán vào Zalo hoặc email gửi cho họ.",
+  "message.body": "Chào anh/chị, tệp “{name}” anh/chị gửi có {threat}. Em đã dọn tệp này bằng Genra AV. Có thể máy của anh/chị cũng đang bị nhiễm và sẽ lây sang các tệp gửi đi sau. Anh/chị nên quét và dọn máy, ví dụ bằng Genra AV miễn phí: https://github.com/craft-the-code/genra-av/releases",
+  "message.threat": "mã độc",
+  "message.copy": "Sao chép lời nhắn",
+  "message.copied": "Đã sao chép",
+  "message.paste": "Mở Zalo, chọn người gửi tệp, dán vào ô nhắn và gửi.",
+  "message.close": "Đóng"
 }

@@ -79,6 +79,8 @@ const state = {
   machineNotice: null as { tone: Tone; text: string; undo?: Undo } | null,
   startupAll: false,
   repairProgress: null as api.RepairProgress | null,
+  /** Mock 5, "Soạn lời nhắn": a ready message for whoever sent the file, editable, then copied. */
+  compose: { open: false, text: "", copied: false },
   /** The repair plan for the threat on screen, computed while the user reads (Rust plan_repair). */
   plan: null as { path: string; status: "loading" | "ready" | "error"; preview: api.PlanPreview | null } | null,
   installId: "",
@@ -874,7 +876,7 @@ function doneResult(a: Extract<Act, { s: "repaired" }>): string {
         <p>${esc(t(m.left > 0 ? "done.text.partial" : machine ? "done.text.machine" : "done.text"))}</p>
       </div>
       <ul class="done-steps" data-fid="done-steps">${items.join("")}</ul>
-      <div class="card inset tell">${line("message-square")}<span>${esc(t("done.tell"))}</span></div>
+      ${tellSender(first?.name ?? d.name, d.family)}
       ${a.error ? `<div class="notice warn" role="alert">${icon("warn")}<span>${esc(a.error)}</span></div>` : ""}
       <div class="actions">
         ${first ? `<button class="btn primary" data-action="reveal" data-path="${esc(first.clean_path)}" data-fid="reveal-clean">${esc(t("result.reveal"))}</button>` : ""}
@@ -882,6 +884,45 @@ function doneResult(a: Extract<Act, { s: "repaired" }>): string {
       </div>
     </div>
   </section>`;
+}
+
+/** What the message calls the threat: the plain family name, else "mã độc" / "malware". */
+function threatWords(family: string): string {
+  const key = `family.${family}`;
+  const named = t(key);
+  const w = named === key ? t("message.threat") : named;
+  return w.charAt(0).toLowerCase() + w.slice(1);
+}
+
+/** Mock 5: the note to tell the sender, and "Soạn lời nhắn" with a message ready to paste in Zalo. */
+function tellSender(name: string, family: string): string {
+  const c = state.compose;
+  if (!c.open)
+    return `<div class="card inset tell">${line("message-square")}<span>${esc(t("done.tell"))}</span>
+      <button class="btn small push" data-action="compose" data-name="${esc(name)}" data-family="${esc(family)}" data-fid="compose">${esc(t("message.compose"))}</button></div>`;
+  return `<section class="card inset compose" aria-labelledby="compose-title">
+    <h3 class="overline" id="compose-title">${esc(t("message.title"))}</h3>
+    <p class="muted caption" style="margin:0 0 10px">${esc(t("message.hint"))}</p>
+    <textarea id="compose-text" data-fid="compose-text" rows="6" aria-labelledby="compose-title">${esc(c.text)}</textarea>
+    <div class="actions" style="margin-top:10px">
+      <button class="btn primary with-icon" data-action="compose-copy" data-fid="compose-copy">${line(c.copied ? "check" : "copy", 16)}${esc(t(c.copied ? "message.copied" : "message.copy"))}</button>
+      <button class="link" data-action="compose-close" data-fid="compose-close">${esc(t("message.close"))}</button>
+    </div>
+    ${c.copied ? `<p class="muted caption" role="status" style="margin:8px 0 0">${esc(t("message.paste"))}</p>` : ""}
+  </section>`;
+}
+
+/** Puts the text on the clipboard; older webviews without the async API copy the selected text. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = root.querySelector<HTMLTextAreaElement>("#compose-text");
+    if (!ta) return false;
+    ta.select();
+    return document.execCommand("copy");
+  }
 }
 
 /** Mock 4: Excel holds what the repair must change. Nothing has changed yet. */
@@ -909,10 +950,12 @@ function excelResult(a: Extract<Act, { s: "excel" }>): string {
 }
 
 function quarantinedResult(q: api.Quarantined): string {
+  const r = state.scan.status === "done" ? state.scan.result : null;
   return `<section class="card hero result" aria-labelledby="res-title">
     ${icon("ok")}
     <div class="result-body">
       <div class="result-head"><h2 id="res-title">${esc(t("quarantined.title"))}</h2><p>${esc(t("quarantined.text", { name: q.name }))}</p></div>
+      ${tellSender(q.name, r ? (topFinding(r)?.family ?? "") : "")}
       <div class="actions">
         <button class="btn primary" data-action="pick" data-fid="again">${esc(t("result.again"))}</button>
         <button class="link with-icon" data-action="undo" data-type="quarantine" data-id="${esc(q.id)}" data-fid="undo-q"${busyAttr(`undo:${q.id}`)}>${line("undo-2", 18)}${esc(t("history.restore"))}</button>
@@ -1280,6 +1323,7 @@ async function refreshRules() {
 
 function resetResult() {
   state.act = { s: "idle" };
+  state.compose = { open: false, text: "", copied: false };
   state.details = false;
   state.report = { open: false, note: "", status: "idle", error: "" };
   state.notice = null;
@@ -1567,6 +1611,23 @@ root.addEventListener("click", (ev) => {
     case "quarantine":
       void quarantine();
       break;
+    case "compose":
+      state.compose = { open: true, copied: false, text: t("message.body", { name: el.dataset.name ?? "", threat: threatWords(el.dataset.family ?? "") }) };
+      render();
+      root.querySelector<HTMLElement>("#compose-text")?.focus();
+      break;
+    case "compose-copy":
+      void copyText(state.compose.text).then((ok) => {
+        state.compose.copied = ok;
+        render();
+        root.querySelector<HTMLElement>('[data-fid="compose-copy"]')?.focus();
+      });
+      break;
+    case "compose-close":
+      state.compose = { open: false, text: "", copied: false };
+      render();
+      root.querySelector<HTMLElement>('[data-fid="compose"]')?.focus();
+      break;
     case "undo-repair":
       if (state.act.s === "repaired") {
         state.act.undoing = true;
@@ -1726,6 +1787,10 @@ root.addEventListener("click", (ev) => {
 root.addEventListener("input", (ev) => {
   const el = ev.target as HTMLTextAreaElement;
   if (el.id === "report-note") state.report.note = el.value;
+  if (el.id === "compose-text") {
+    state.compose.text = el.value;
+    state.compose.copied = false;
+  }
 });
 
 // Esc on the update dialog is "Để sau" (asks again next launch), never the quiet ×.
