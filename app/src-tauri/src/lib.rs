@@ -46,7 +46,24 @@ struct AppState {
     pending: Mutex<HashMap<String, Pending>>,
     /// "Máy của bạn", read once per session (health checks and signatures take a few seconds).
     overview: Mutex<Option<Arc<machine::Overview>>>,
+    /// Plans shown on the threat screen before the press, by path: "Dọn sạch giúp tôi" runs the
+    /// plan the user read when it is still fresh, instead of a new one that may differ.
+    previews: Mutex<HashMap<PathBuf, Preview>>,
+    /// Bumped by every "Dọn sạch giúp tôi": a plan computed before the press but finished after it
+    /// is not kept (the press planned for itself, and a later press must not run the older plan).
+    plan_gen: std::sync::atomic::AtomicU64,
 }
+
+/// A plan computed for the threat screen, with the file's hash when it was made.
+struct Preview {
+    plan: genra_av_machine::repair::Plan,
+    sha256: String,
+    family: String,
+    at: std::time::Instant,
+}
+
+/// A shown plan is run as it is only this long after it was made; after that the press plans again.
+const PREVIEW_FRESH: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// A repair plan that came back "close Excel first", with what the done screen needs.
 struct Pending {
@@ -239,6 +256,62 @@ fn execute(app: &AppHandle, plan: genra_av_machine::repair::Plan, name: String, 
     Ok(view)
 }
 
+/// One step of the plan, as the threat screen lists it.
+#[derive(Serialize)]
+struct PlanStep {
+    title_vi: String,
+    title_en: String,
+}
+
+/// What "Dọn sạch giúp tôi" will do for this file, computed before the press (the same planner
+/// the press runs). Read-only: nothing on disk or in the registry changes.
+#[derive(Serialize)]
+struct PlanPreview {
+    steps: Vec<PlanStep>,
+    summary_vi: String,
+    summary_en: String,
+    /// Excel has a file open that a step touches: the press will ask to close it first.
+    needs_excel: bool,
+}
+
+#[tauri::command]
+async fn plan_repair(app: AppHandle, path: String) -> Result<PlanPreview, repair::Failure> {
+    let st = app.state::<AppState>();
+    let p = st.allowed(&path).map_err(|e| failure("not_allowed", e))?;
+    let rules = st.rules();
+    let gen = st.plan_gen.load(Ordering::SeqCst);
+    let a = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = repair::precheck(&rules, &p)?;
+        let st = a.state::<AppState>();
+        let mut plan = st.machine.plan_for_threat(&p, &report, &rules);
+        repair::keep_cleanable(&mut plan);
+        let view = PlanPreview {
+            steps: plan.steps.iter().map(|s| PlanStep { title_vi: s.title_vi.clone(), title_en: s.title_en.clone() }).collect(),
+            summary_vi: plan.summary_vi.clone(),
+            summary_en: plan.summary_en.clone(),
+            needs_excel: plan.need().is_some(),
+        };
+        // Checked under the lock: a press that started meanwhile has bumped the generation.
+        if let Ok(mut m) = st.previews.lock() {
+            if st.plan_gen.load(Ordering::SeqCst) != gen {
+                return Ok(view);
+            }
+            m.retain(|_, v| v.at.elapsed() < PREVIEW_FRESH);
+            m.insert(p, Preview { plan, sha256: report.sha256.clone(), family: repair::family_of(&report), at: std::time::Instant::now() });
+        }
+        Ok(view)
+    })
+    .await
+    .map_err(|e| failure("other", e))?
+}
+
+/// The plan shown for `path`, if it is fresh and the file is still the one it was made for.
+fn take_preview(st: &AppState, path: &Path, sha256: &str) -> Option<(genra_av_machine::repair::Plan, String)> {
+    let v = st.previews.lock().ok()?.remove(path)?;
+    (v.at.elapsed() < PREVIEW_FRESH && v.sha256.eq_ignore_ascii_case(sha256)).then_some((v.plan, v.family))
+}
+
 /// "Dọn sạch giúp tôi": cleans the file, takes the worm out of Excel's startup folder and cleans
 /// the other infected workbooks, as one journal group ("Hoàn tác" undoes it all). Refused by the
 /// cleaner: nothing changes and the window offers "Cách ly tệp này".
@@ -250,11 +323,17 @@ async fn repair_file(app: AppHandle, path: String) -> Result<RepairView, repair:
     let a = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = a.emit("repair-progress", RepairProgress { phase: "planning", step: None });
-        let report = repair::precheck(&rules, &p)?;
         let st = a.state::<AppState>();
-        let mut plan = st.machine.plan_for_threat(&p, &report, &rules);
-        repair::keep_cleanable(&mut plan);
-        execute(&a, plan, util::file_name(&p), repair::family_of(&report))
+        st.plan_gen.fetch_add(1, Ordering::SeqCst);
+        let report = repair::precheck(&rules, &p)?;
+        // The plan the user just read, when it is fresh; the runner checks each step's
+        // preconditions again (hashes, process start times, Excel), so a stale detail fails safe.
+        let (plan, family) = take_preview(&st, &p, &report.sha256).unwrap_or_else(|| {
+            let mut plan = st.machine.plan_for_threat(&p, &report, &rules);
+            repair::keep_cleanable(&mut plan);
+            (plan, repair::family_of(&report))
+        });
+        execute(&a, plan, util::file_name(&p), family)
     })
     .await
     .map_err(|e| failure("other", e))?
@@ -876,6 +955,8 @@ pub fn run() {
                 machine: Box::new(machine::Real::new(&data)),
                 pending: Mutex::new(HashMap::new()),
                 overview: Mutex::new(None),
+                previews: Mutex::new(HashMap::new()),
+                plan_gen: std::sync::atomic::AtomicU64::new(0),
                 data,
             };
             app.manage(state);
@@ -908,6 +989,7 @@ pub fn run() {
             launch_path,
             pick_file,
             scan_file,
+            plan_repair,
             repair_file,
             continue_repair,
             excel_status,

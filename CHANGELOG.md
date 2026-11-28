@@ -5,6 +5,12 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 
 ## [Unreleased]
 
+### Added
+- Threat screen shows the computed repair plan before the press (`plan_repair`): the same planner
+  "Dọn sạch giúp tôi" runs, read-only, listing every file it cleans, process it stops and startup
+  entry it switches off (six rows, then "và N bước khác"), and whether Excel must close first. A
+  plan under two minutes old for an unchanged file is the one the press runs.
+
 ### Changed
 - Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and
   ed25519-dalek 3 (rule pack signatures unchanged), with the latest patch releases elsewhere; vite 8.4;

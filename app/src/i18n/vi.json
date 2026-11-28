@@ -304,5 +304,8 @@
   "done.left": "Cần khởi động lại máy",
   "done.left.detail": "Windows chưa cho Genra làm {n} việc. Hãy khởi động lại máy rồi quét lại một lần.",
   "done.title.partial": "Đã dọn phần lớn, cần khởi động lại máy",
-  "done.text.partial": "Windows chưa cho Genra làm hết. Khởi động lại máy rồi quét lại một lần để xong."
+  "done.text.partial": "Windows chưa cho Genra làm hết. Khởi động lại máy rồi quét lại một lần để xong.",
+  "result.plan.loading": "Genra đang xem cụ thể cần dọn những gì…",
+  "result.plan.more": "và {n} bước khác",
+  "result.plan.excel": "Excel đang mở một tệp cần dọn: Genra sẽ nhờ bạn đóng Excel trước."
 }
