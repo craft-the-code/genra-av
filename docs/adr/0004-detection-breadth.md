@@ -43,6 +43,10 @@ quarantine anything.
   and the signing job recomputes the trusted list from the same inputs with the code on `main`
   instead of taking the build job's word for it. On the client, the safety rails below still apply:
   a file signed by Microsoft or an allow-listed publisher is never quarantined on hash evidence alone.
+- As built (27/11): URLhaus payloads that URLhaus names a family for, and ThreatFox SHA-256 IOCs with
+  confidence at least 75, join the untrusted feed list each run (`scripts/abusech_feeds.py`; a feed
+  that fails is skipped with a warning). Only MalwareBazaar entries are graded into the trusted list,
+  since the grading reads MalwareBazaar's family and vendor results.
 - **Size**: the pack carries the last 90 days (tens of thousands of hashes, about 1–3 MB). Older
   hashes go to an online lookup (below) instead of every PC.
 - **Online lookup by hash prefix**: the app sends only the first 5 hex characters (20 bits) of a

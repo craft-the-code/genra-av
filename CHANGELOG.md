@@ -30,6 +30,9 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
 - "Mở cùng máy" (`tauri-plugin-autostart`, on by default, release builds only): a login item starts Genra
   with `--hidden`, window not shown, guard running. The main window now starts hidden and is shown
   in setup unless started that way.
+- Hash feeds (ADR 0004, 1b): URLhaus payloads with a named family and ThreatFox SHA-256 IOCs at
+  confidence 75 or more join the untrusted ("Đáng ngờ") hash list on each rule-pack run
+  (`scripts/abusech_feeds.py`, optional per feed). The trusted list is still graded from MalwareBazaar only.
 
 ### Changed
 - Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and
