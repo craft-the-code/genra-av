@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkSampleBody, parseReport, parseSampleMeta, MAX_SAMPLE_BYTES } from "../src/validate.ts";
+import { checkSampleBody, parsePrefix, parseReport, parseSampleMeta, MAX_SAMPLE_BYTES } from "../src/validate.ts";
 
 const base = {
   kind: "bug",
@@ -61,4 +61,9 @@ test("sample body must be a small OLE2 file", () => {
   const big = new Uint8Array(MAX_SAMPLE_BYTES + 1);
   big.set(ole);
   assert.equal(checkSampleBody(big).ok, false);
+});
+
+test("lookup prefix is exactly 5 hex characters", () => {
+  assert.deepEqual(parsePrefix("A1b2C"), { ok: true, value: "a1b2c" });
+  for (const bad of ["a1b2", "a1b2c3", "a1b2g", "", "../x1", "a1b2c%00"]) assert.equal(parsePrefix(bad).ok, false, bad);
 });

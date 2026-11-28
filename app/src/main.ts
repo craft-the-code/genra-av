@@ -54,6 +54,7 @@ const state = {
   guardHits: [] as ScanResult[],
   guardUsb: null as api.GuardUsb | null,
   autostart: null as api.Autostart | null,
+  onlineLookup: null as api.OnlineLookup | null,
   scan: { status: "idle" } as ScanState,
   act: { s: "idle" } as Act,
   details: false,
@@ -1168,6 +1169,15 @@ function autostartToggle(): string {
     )}</span></span></label>`;
 }
 
+/** ADR 0004 step 5; shown only in builds where the lookup can run (lookup.rs, AVAILABLE). */
+function onlineLookupToggle(): string {
+  const o = state.onlineLookup;
+  if (!o?.available) return "";
+  return `<label class="toggle"><input type="checkbox" name="online_lookup" data-fid="online-lookup"${o.on ? " checked" : ""}${state.pending.has("online-lookup") ? " disabled" : ""}>
+    <span class="switch" aria-hidden="true"></span>
+    <span><span class="toggle-title">${esc(t("settings.online_lookup"))}</span><span class="row-sub">${esc(t("settings.online_lookup.text"))}</span></span></label>`;
+}
+
 /** Windows only: the Explorer right-click entry, on by default. */
 function shellMenuToggle(): string {
   const m = state.shellMenu;
@@ -1202,6 +1212,7 @@ function settingsPage(): string {
           <span><span class="toggle-title">${esc(t("settings.send_hashes"))}</span><span class="row-sub">${esc(t("settings.send_hashes.text"))}</span></span></label>
         ${guardToggle()}
         ${autostartToggle()}
+        ${onlineLookupToggle()}
         ${shellMenuToggle()}
         <div class="install-id">
           <div class="row-text"><span class="toggle-title" id="install-id-label">${esc(t("settings.install_id"))}</span>
@@ -1891,6 +1902,14 @@ root.addEventListener("change", (ev) => {
       },
       () => render(),
     );
+  } else if (el.name === "online_lookup") {
+    void withPending("online-lookup", () => api.setOnlineLookup(el.checked)).then(
+      (o) => {
+        state.onlineLookup = o;
+        render();
+      },
+      () => render(),
+    );
   } else if (el.name === "autostart") {
     void withPending("autostart", () => api.setAutostart(el.checked)).then(
       (a) => {
@@ -1983,6 +2002,7 @@ async function start() {
   void fill(api.shellMenu(getLang()), (m) => (state.shellMenu = m));
   void fill(api.guardStatus(), (g) => (state.guard = state.guard ?? g));
   void fill(api.autostart(), (a) => (state.autostart = a));
+  void fill(api.onlineLookup(), (o) => (state.onlineLookup = o));
   const hist = await api.history().catch(() => ({ entries: [], other_quarantine: [] }) as api.HistoryView);
   state.history = hist;
   state.loaded.history = true;

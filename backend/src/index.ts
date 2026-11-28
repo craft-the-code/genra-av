@@ -2,9 +2,10 @@
 //   GET  /v1/health   liveness
 //   POST /v1/report   false positive / missed threat / bug report (JSON)
 //   POST /v1/sample   extracted VBA project for analysis (raw body, metadata in headers)
+//   GET  /v1/lookup/<5 hex>  known-bad SHA-256 starting with that prefix (k-anonymity, ADR 0004 step 5)
 // No accounts and no cookies. Raw IPs are never stored: only a daily-salted hash for rate limits.
 
-import { checkSampleBody, parseReport, parseSampleMeta } from "./validate.ts";
+import { checkSampleBody, parsePrefix, parseReport, parseSampleMeta } from "./validate.ts";
 
 export interface Env {
   DB: D1Database;
@@ -105,6 +106,25 @@ async function handleSample(req: Request, env: Env): Promise<Response> {
   return json(201, { id, duplicate: false });
 }
 
+/** Every known-bad hash with this prefix; the client compares its full hash on the machine. The
+ *  answer is the same for everyone, so Cloudflare's cache serves repeats and nothing about the
+ *  asker is stored: no row is written, no IP is kept (ADR 0004: no request log of prefixes or IPs). */
+async function handleLookup(req: Request, raw: string, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const p = parsePrefix(raw);
+  if (!p.ok) return json(400, { error: p.error });
+  // The Worker runs in front of Cloudflare's cache, so it keeps answers there itself.
+  const key = new Request(new URL(`/v1/lookup/${p.value}`, req.url).toString());
+  const hit = await caches.default.match(key);
+  if (hit) return hit;
+  const rows = await env.DB.prepare("SELECT sha256 FROM known_bad WHERE prefix = ?1 ORDER BY sha256 LIMIT 2000")
+    .bind(p.value)
+    .all<{ sha256: string }>();
+  const res = json(200, { prefix: p.value, hashes: rows.results.map((r) => r.sha256) });
+  res.headers.set("cache-control", "public, max-age=3600");
+  ctx.waitUntil(caches.default.put(key, res.clone()));
+  return res;
+}
+
 /** Daily: delete samples and rows past the retention promised in the privacy policy. */
 async function purge(env: Env): Promise<void> {
   const days = Number(env.RETENTION_DAYS ?? "90");
@@ -118,13 +138,14 @@ async function purge(env: Env): Promise<void> {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
     try {
       if (url.pathname === "/v1/health" && req.method === "GET") return json(200, { ok: true, service: "genra-api", version: VERSION });
       if (url.pathname === "/v1/report" && req.method === "POST") return await handleReport(req, env);
       if (url.pathname === "/v1/sample" && req.method === "POST") return await handleSample(req, env);
+      if (url.pathname.startsWith("/v1/lookup/") && req.method === "GET") return await handleLookup(req, url.pathname.slice("/v1/lookup/".length), env, ctx);
       return json(404, { error: "not found" });
     } catch (e) {
       console.error("unhandled", e instanceof Error ? e.message : String(e));

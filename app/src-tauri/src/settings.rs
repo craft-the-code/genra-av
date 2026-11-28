@@ -22,6 +22,10 @@ pub struct Settings {
     /// The login item was written once from `start_at_login`; after that only the switch changes it.
     #[serde(default)]
     pub autostart_applied: bool,
+    /// ADR 0004 step 5: check a file nothing flagged against the online list by its hash prefix.
+    /// On by default (decided with Hoan, 27/11); does nothing while `lookup::AVAILABLE` is false.
+    #[serde(default = "yes")]
+    pub online_lookup: bool,
 }
 
 fn yes() -> bool {
@@ -30,7 +34,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { send_hashes: false, shell_menu: true, guard: true, start_at_login: true, autostart_applied: false }
+        Settings { send_hashes: false, shell_menu: true, guard: true, start_at_login: true, autostart_applied: false, online_lookup: true }
     }
 }
 
