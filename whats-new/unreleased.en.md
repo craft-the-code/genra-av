@@ -4,3 +4,4 @@ Genra shows you exactly what it will clean before it starts.
 - After cleaning, "Soạn lời nhắn" drafts a message telling the sender to clean their computer; copy it and paste it into Zalo.
 - On Windows, right-click a file and choose "Kiểm tra bằng Genra AV" to check it at once; it can be switched off in "Cài đặt".
 - "Canh gác" now works: while Genra is open, new files in Downloads and Zalo are checked at once and USB sticks when plugged in.
+- Closing the window keeps Genra guarding from the system tray, and it starts in the tray when you sign in; both can be switched off in "Cài đặt".

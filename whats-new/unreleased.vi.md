@@ -4,3 +4,4 @@ Genra cho bạn thấy trước chính xác nó sẽ dọn gì.
 - Sau khi dọn xong, nút "Soạn lời nhắn" soạn sẵn lời báo cho người gửi tệp để họ dọn máy; bạn sao chép và dán vào Zalo.
 - Trên Windows, bấm chuột phải vào một tệp và chọn "Kiểm tra bằng Genra AV" để kiểm tra ngay; tắt được trong "Cài đặt".
 - "Canh gác" đã chạy: khi Genra đang mở, tệp mới trong Downloads, Zalo và USB vừa cắm được kiểm tra ngay.
+- Đóng cửa sổ thì Genra vẫn canh gác ở khay hệ thống, và tự chạy ở khay khi bạn mở máy; tắt được trong "Cài đặt".

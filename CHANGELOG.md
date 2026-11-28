@@ -24,6 +24,12 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   files itself), and a USB stick is scanned when plugged in. A find gives one desktop notification per
   file content, a history entry, and a row in "Tệp tìm thấy"; nothing is moved without the user.
   Switch in Cài đặt (on by default); live status in the sidebar and on "Máy của bạn".
+- Tray icon (open, quit; relabelled with the window's language). With the guard on, closing the window
+  hides it and Genra keeps guarding from the tray (one notification per session says so); with it
+  off, closing quits as before. On macOS the Dock icon brings the window back.
+- "Mở cùng máy" (`tauri-plugin-autostart`, on by default, release builds only): a login item starts Genra
+  with `--hidden`, window not shown, guard running. The main window now starts hidden and is shown
+  in setup unless started that way.
 
 ### Changed
 - Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and

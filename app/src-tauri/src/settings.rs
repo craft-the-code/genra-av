@@ -16,6 +16,12 @@ pub struct Settings {
     /// "Canh gác": watch Downloads, Zalo and USB sticks while Genra runs. On unless switched off.
     #[serde(default = "yes")]
     pub guard: bool,
+    /// "Mở cùng máy": start hidden in the tray at login, so the guard runs. On unless switched off.
+    #[serde(default = "yes")]
+    pub start_at_login: bool,
+    /// The login item was written once from `start_at_login`; after that only the switch changes it.
+    #[serde(default)]
+    pub autostart_applied: bool,
 }
 
 fn yes() -> bool {
@@ -24,7 +30,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { send_hashes: false, shell_menu: true, guard: true }
+        Settings { send_hashes: false, shell_menu: true, guard: true, start_at_login: true, autostart_applied: false }
     }
 }
 
@@ -46,7 +52,7 @@ mod tests {
     #[test]
     fn older_settings_files_keep_the_menu_on() {
         let s: Settings = serde_json::from_str(r#"{"send_hashes":true}"#).unwrap();
-        assert!(s.send_hashes && s.shell_menu && s.guard);
+        assert!(s.send_hashes && s.shell_menu && s.guard && s.start_at_login);
         assert!(Settings::default().shell_menu && !Settings::default().send_hashes);
     }
 }

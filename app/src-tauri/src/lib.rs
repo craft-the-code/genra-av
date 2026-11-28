@@ -11,6 +11,7 @@ mod quick;
 mod repair;
 mod settings;
 mod shell;
+mod tray;
 mod util;
 
 use allow::Allow;
@@ -804,11 +805,55 @@ fn sync_shell_menu(st: &AppState, lang: &str) -> ShellMenu {
 /// Called by the window at start and when its language changes: the menu entry follows the
 /// setting, with the label in the window's language.
 #[tauri::command]
-fn shell_menu(st: St, lang: String) -> ShellMenu {
+fn shell_menu(app: AppHandle, st: St, lang: String) -> ShellMenu {
     if let Ok(mut l) = st.lang.lock() {
         *l = if lang == "en" { "en".into() } else { "vi".into() };
     }
+    tray::relabel(&app, &lang);
     sync_shell_menu(&st, &lang)
+}
+
+/// "Mở cùng máy" as the window shows it: the setting, and whether the login item is there now
+/// (`None` in development builds, which never register one).
+#[derive(Serialize)]
+struct Autostart {
+    on: bool,
+    registered: Option<bool>,
+    error: Option<String>,
+}
+
+/// The setting and the login item as they are; reading never changes the login item, so a
+/// login item the user switched off in Task Manager stays off.
+fn autostart_view(app: &AppHandle, on: bool) -> Autostart {
+    match tray::autostart_registered(app) {
+        Ok(r) => Autostart { on, registered: r, error: None },
+        Err(e) => Autostart { on, registered: None, error: Some(e) },
+    }
+}
+
+fn autostart_set(app: &AppHandle, on: bool) -> Autostart {
+    match tray::sync_autostart(app, on) {
+        Ok(r) => Autostart { on, registered: (!cfg!(debug_assertions)).then_some(r), error: None },
+        Err(e) => Autostart { on, registered: None, error: Some(e) },
+    }
+}
+
+#[tauri::command]
+fn autostart(app: AppHandle, st: St) -> Autostart {
+    let on = st.settings.lock().map(|s| s.start_at_login).unwrap_or(true);
+    autostart_view(&app, on)
+}
+
+/// The "Mở cùng máy" switch in Cài đặt.
+#[tauri::command]
+fn set_autostart(app: AppHandle, st: St, on: bool) -> Result<Autostart, String> {
+    {
+        let mut s = st.settings.lock().map_err(|e| e.to_string())?;
+        s.start_at_login = on;
+        s.autostart_applied = true;
+        s.save(&st.data).map_err(|e| e.to_string())?;
+    }
+    Ok(autostart_set(&app, on))
 }
 
 /// What "Canh gác" watches now.
@@ -1000,6 +1045,16 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "no_update".to_string())?;
     update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    // A session the login item started carries `--hidden`; a restart would keep it and the window
+    // the user just pressed in would vanish into the tray. Start the new version plainly instead.
+    if tray::started_hidden() {
+        if let Ok(exe) = std::env::current_exe() {
+            if std::process::Command::new(exe).spawn().is_ok() {
+                app.exit(0);
+                return Ok(());
+            }
+        }
+    }
     app.restart()
 }
 
@@ -1023,6 +1078,13 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name(tray::LOGIN_NAME)
+                .arg(tray::HIDDEN_ARG)
+                .macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data = genra_av_core::paths::data_dir().or_else(|_| app.path().app_data_dir())?;
@@ -1056,6 +1118,28 @@ pub fn run() {
             #[cfg(debug_assertions)]
             e2e_script(app.handle());
             guard::start(app.handle().clone());
+            if let Err(e) = tray::setup(app.handle()) {
+                eprintln!("tray: {e}");
+            }
+            // The login item is written once (first start, by the default), then only by the switch in
+            // Cài đặt: one switched off in Task Manager or by IT is not switched back on.
+            {
+                let st = app.state::<AppState>();
+                let first = st.settings.lock().ok().filter(|s| !s.autostart_applied).map(|s| s.start_at_login);
+                if let Some(on) = first {
+                    if tray::sync_autostart(app.handle(), on).is_ok() && !cfg!(debug_assertions) {
+                        if let Ok(mut s) = st.settings.lock() {
+                            s.autostart_applied = true;
+                            let _ = s.save(&st.data);
+                        }
+                    }
+                }
+            }
+            // The window starts hidden (tauri.conf.json); the login item keeps it in the tray.
+            // Without a tray icon nothing could bring a hidden window back: show it anyway.
+            if !tray::started_hidden() || app.try_state::<tray::Items>().is_none() {
+                tray::show(app.handle());
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -1066,6 +1150,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                tray::on_close(window, api);
+            }
             // Dropped paths join the allowlist here, then the window is told to check them.
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 let st = window.state::<AppState>();
@@ -1108,8 +1195,18 @@ pub fn run() {
             set_shell_menu,
             guard_status,
             set_guard,
+            autostart,
+            set_autostart,
             report_false_positive
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Genra AV");
+        .build(tauri::generate_context!())
+        .expect("error while building Genra AV")
+        .run(|app, event| {
+            // macOS: the Dock icon brings a hidden window back.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                tray::show(app);
+            }
+            let _ = (app, event);
+        });
 }

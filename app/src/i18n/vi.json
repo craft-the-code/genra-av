@@ -327,5 +327,8 @@
   "machine.guard.usb.on": "Quét khi cắm",
   "machine.guard.scanning": "Đang quét",
   "settings.guard": "Canh gác thư mục",
-  "settings.guard.text": "Khi Genra đang mở, mỗi tệp mới trong Downloads và Zalo được kiểm tra ngay, USB được quét khi cắm vào. Không thấy gì thì Genra im lặng."
+  "settings.guard.text": "Khi Genra đang mở, mỗi tệp mới trong Downloads và Zalo được kiểm tra ngay, USB được quét khi cắm vào. Không thấy gì thì Genra im lặng.",
+  "settings.autostart": "Mở cùng máy",
+  "settings.autostart.text": "Genra chạy ở khay hệ thống khi bạn mở máy để canh gác, cửa sổ không hiện ra. Đóng cửa sổ thì Genra vẫn canh gác ở khay.",
+  "settings.autostart.error": "Chưa đặt được: {detail}"
 }

@@ -53,6 +53,7 @@ const state = {
   guard: null as api.GuardStatus | null,
   guardHits: [] as ScanResult[],
   guardUsb: null as api.GuardUsb | null,
+  autostart: null as api.Autostart | null,
   scan: { status: "idle" } as ScanState,
   act: { s: "idle" } as Act,
   details: false,
@@ -1157,6 +1158,16 @@ function guardToggle(): string {
     <span><span class="toggle-title">${esc(t("settings.guard"))}</span><span class="row-sub">${esc(t("settings.guard.text"))}</span></span></label>`;
 }
 
+/** "Mở cùng máy": Genra starts in the tray at login, so the guard needs no one to open it. */
+function autostartToggle(): string {
+  const a = state.autostart;
+  return `<label class="toggle"><input type="checkbox" name="autostart" data-fid="autostart"${a?.on ? " checked" : ""}${state.pending.has("autostart") || !a ? " disabled" : ""}>
+    <span class="switch" aria-hidden="true"></span>
+    <span><span class="toggle-title">${esc(t("settings.autostart"))}</span><span class="row-sub">${esc(
+      a?.error ? t("settings.autostart.error", { detail: a.error }) : t("settings.autostart.text"),
+    )}</span></span></label>`;
+}
+
 /** Windows only: the Explorer right-click entry, on by default. */
 function shellMenuToggle(): string {
   const m = state.shellMenu;
@@ -1190,6 +1201,7 @@ function settingsPage(): string {
           <span class="switch" aria-hidden="true"></span>
           <span><span class="toggle-title">${esc(t("settings.send_hashes"))}</span><span class="row-sub">${esc(t("settings.send_hashes.text"))}</span></span></label>
         ${guardToggle()}
+        ${autostartToggle()}
         ${shellMenuToggle()}
         <div class="install-id">
           <div class="row-text"><span class="toggle-title" id="install-id-label">${esc(t("settings.install_id"))}</span>
@@ -1879,6 +1891,14 @@ root.addEventListener("change", (ev) => {
       },
       () => render(),
     );
+  } else if (el.name === "autostart") {
+    void withPending("autostart", () => api.setAutostart(el.checked)).then(
+      (a) => {
+        state.autostart = a;
+        render();
+      },
+      () => render(),
+    );
   } else if (el.name === "shell_menu") {
     void withPending("shell-menu", () => api.setShellMenu(el.checked, getLang())).then(
       (m) => {
@@ -1962,6 +1982,7 @@ async function start() {
   // The Explorer entry follows the setting, labelled in the window's language (Windows only).
   void fill(api.shellMenu(getLang()), (m) => (state.shellMenu = m));
   void fill(api.guardStatus(), (g) => (state.guard = state.guard ?? g));
+  void fill(api.autostart(), (a) => (state.autostart = a));
   const hist = await api.history().catch(() => ({ entries: [], other_quarantine: [] }) as api.HistoryView);
   state.history = hist;
   state.loaded.history = true;
