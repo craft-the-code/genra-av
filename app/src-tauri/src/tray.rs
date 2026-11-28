@@ -9,6 +9,9 @@ use tauri::{AppHandle, Manager, Wry};
 
 /// The argument the login item passes: start in the tray, window hidden.
 pub const HIDDEN_ARG: &str = "--hidden";
+/// The login item's name (Windows Run value, macOS LaunchAgent). Never change it: the NSIS
+/// uninstaller (`windows/hooks.nsh`) removes this name.
+pub const LOGIN_NAME: &str = "Genra AV";
 
 /// The tray menu's items, kept to relabel them when the window's language changes.
 pub struct Items {
@@ -79,7 +82,8 @@ pub fn relabel(app: &AppHandle, lang: &str) {
 pub fn on_close(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     let app = window.app_handle();
     let guarding = app.try_state::<crate::AppState>().is_some_and(|s| s.guard_on.load(Ordering::SeqCst));
-    if !guarding {
+    // Without a tray icon (it failed to build) a hidden window could never come back: close.
+    if !guarding || app.try_state::<Items>().is_none() {
         return;
     }
     api.prevent_close();
@@ -101,6 +105,15 @@ pub fn on_close(window: &tauri::Window, api: &tauri::CloseRequestApi) {
 /// Started by the login item: stay in the tray.
 pub fn started_hidden() -> bool {
     std::env::args().any(|a| a == HIDDEN_ARG)
+}
+
+/// Whether the login item is there now; `None` in development builds, which never register one.
+pub fn autostart_registered(app: &AppHandle) -> Result<Option<bool>, String> {
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map(Some).map_err(|e| e.to_string())
 }
 
 /// "Mở cùng máy": the OS login item follows the setting. Release builds only, so a development
