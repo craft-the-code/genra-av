@@ -1371,6 +1371,7 @@ async function scanPath(path: string) {
 }
 
 function showResult(result: ScanResult) {
+  scanToken++;
   resetResult();
   state.scan = { status: "done", result };
   state.page = "scan";
@@ -1410,12 +1411,18 @@ async function clean() {
   const s = state.scan;
   if (s.status !== "done") return;
   const path = s.result.path;
+  // Another file opened meanwhile (dropped, right-click "Kiểm tra bằng Genra AV"): the repair
+  // still finishes and goes to the history, but it does not take over the new file's screen.
+  const token = scanToken;
   state.act = { s: "working", what: "clean" };
   state.repairProgress = null;
   render();
   try {
-    applyRepairView(await api.repairFile(path), path);
+    const v = await api.repairFile(path);
+    if (token !== scanToken) return void refreshHistory();
+    applyRepairView(v, path);
   } catch (e) {
+    if (token !== scanToken) return void refreshHistory();
     const f = failureCode(e);
     state.act = f.kind === "refused" ? { s: "refused", f } : { s: "failed", f };
   }
@@ -1529,13 +1536,16 @@ async function copyInstallId() {
 async function quarantine() {
   const s = state.scan;
   if (s.status !== "done") return;
+  const token = scanToken;
   state.act = { s: "working", what: "quarantine" };
   render();
   try {
     const q = await api.quarantineFile(s.result.path);
-    state.act = { s: "quarantined", q };
     state.quick.handled.add(s.result.path);
+    if (token !== scanToken) return void refreshHistory();
+    state.act = { s: "quarantined", q };
   } catch (e) {
+    if (token !== scanToken) return void refreshHistory();
     state.act = { s: "failed", f: failureCode(e) };
   }
   render(true);
