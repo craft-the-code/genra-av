@@ -36,9 +36,10 @@ The core experience is "Dọn giúp tôi" without breaking anything (docs/ux, co
 
 - `genra-guard` background process (Rust, no UI) + Tauri 2 window opened on demand (ADR 0003);
   Windows spike on a 4 GB PC checks the memory numbers first.
-- Scan on demand, drag and drop, right-click "Kiểm tra bằng Genra AV".
+- Scan on demand, drag and drop, right-click "Kiểm tra bằng Genra AV" (Windows, in review 27/11).
 - Watch the folders threats arrive in (Downloads, Zalo received files, XLSTART, USB drives) with
-  OS file notifications, no kernel driver.
+  OS file notifications, no kernel driver. In-app guard with tray and start at login in review
+  (27/11); XLSTART is not watched yet.
 - Repair: remove persistence (XLSTART worm workbooks, Office startup add-ins), with undo for 30 days.
 - Health card: Windows Defender on and up to date, Office macro setting, Windows updates.
 - Update channel live (ADR 0002): hourly pack check over a CDN, staged rollout, kill switch.
