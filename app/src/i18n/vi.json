@@ -316,5 +316,8 @@
   "message.copy": "Sao chép lời nhắn",
   "message.copied": "Đã sao chép",
   "message.paste": "Mở Zalo, chọn người gửi tệp, dán vào ô nhắn và gửi.",
-  "message.close": "Đóng"
+  "message.close": "Đóng",
+  "settings.shell_menu": "Mục “Kiểm tra bằng Genra AV” khi bấm chuột phải vào tệp",
+  "settings.shell_menu.text": "Bấm chuột phải vào một tệp trong File Explorer để kiểm tra ngay. Trên Windows 11, mục này nằm trong “Show more options”.",
+  "settings.shell_menu.error": "Chưa thêm được vào menu: {detail}"
 }

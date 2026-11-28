@@ -47,7 +47,8 @@ const state = {
   /** The update dialog is open (it opens once per launch for a version not closed with ×). */
   updateDialog: false,
   rules: null as api.RulesInfo | null,
-  settings: { send_hashes: false } as api.Settings,
+  settings: { send_hashes: false, shell_menu: true } as api.Settings,
+  shellMenu: null as api.ShellMenu | null,
   scan: { status: "idle" } as ScanState,
   act: { s: "idle" } as Act,
   details: false,
@@ -1121,6 +1122,17 @@ function machinePage(): string {
 
 // ---------- Cài đặt
 
+/** Windows only: the Explorer right-click entry, on by default. */
+function shellMenuToggle(): string {
+  const m = state.shellMenu;
+  if (!m?.supported) return "";
+  return `<label class="toggle"><input type="checkbox" name="shell_menu" data-fid="shell-menu"${m.on ? " checked" : ""}${state.pending.has("shell-menu") ? " disabled" : ""}>
+    <span class="switch" aria-hidden="true"></span>
+    <span><span class="toggle-title">${esc(t("settings.shell_menu"))}</span><span class="row-sub">${esc(
+      m.error ? t("settings.shell_menu.error", { detail: m.error }) : t("settings.shell_menu.text"),
+    )}</span></span></label>`;
+}
+
 function settingsPage(): string {
   const radio = (name: string, value: string, label: string, checked: boolean) =>
     `<label class="choice"><input type="radio" name="${name}" value="${value}" data-fid="${name}-${value}"${checked ? " checked" : ""}><span>${esc(label)}</span></label>`;
@@ -1142,6 +1154,7 @@ function settingsPage(): string {
         <label class="toggle"><input type="checkbox" name="send_hashes" data-fid="send-hashes"${state.settings.send_hashes ? " checked" : ""}${state.pending.has("send-hashes") || !state.loaded.settings ? " disabled" : ""}>
           <span class="switch" aria-hidden="true"></span>
           <span><span class="toggle-title">${esc(t("settings.send_hashes"))}</span><span class="row-sub">${esc(t("settings.send_hashes.text"))}</span></span></label>
+        ${shellMenuToggle()}
         <div class="install-id">
           <div class="row-text"><span class="toggle-title" id="install-id-label">${esc(t("settings.install_id"))}</span>
             <code class="mono" aria-labelledby="install-id-label" data-fid="install-id">${state.installId ? esc(state.installId) : '<span class="skel bar inline" aria-label="…"></span>'}</code>
@@ -1358,6 +1371,7 @@ async function scanPath(path: string) {
 }
 
 function showResult(result: ScanResult) {
+  scanToken++;
   resetResult();
   state.scan = { status: "done", result };
   state.page = "scan";
@@ -1397,12 +1411,18 @@ async function clean() {
   const s = state.scan;
   if (s.status !== "done") return;
   const path = s.result.path;
+  // Another file opened meanwhile (dropped, right-click "Kiểm tra bằng Genra AV"): the repair
+  // still finishes and goes to the history, but it does not take over the new file's screen.
+  const token = scanToken;
   state.act = { s: "working", what: "clean" };
   state.repairProgress = null;
   render();
   try {
-    applyRepairView(await api.repairFile(path), path);
+    const v = await api.repairFile(path);
+    if (token !== scanToken) return void refreshHistory();
+    applyRepairView(v, path);
   } catch (e) {
+    if (token !== scanToken) return void refreshHistory();
     const f = failureCode(e);
     state.act = f.kind === "refused" ? { s: "refused", f } : { s: "failed", f };
   }
@@ -1516,13 +1536,16 @@ async function copyInstallId() {
 async function quarantine() {
   const s = state.scan;
   if (s.status !== "done") return;
+  const token = scanToken;
   state.act = { s: "working", what: "quarantine" };
   render();
   try {
     const q = await api.quarantineFile(s.result.path);
-    state.act = { s: "quarantined", q };
     state.quick.handled.add(s.result.path);
+    if (token !== scanToken) return void refreshHistory();
+    state.act = { s: "quarantined", q };
   } catch (e) {
+    if (token !== scanToken) return void refreshHistory();
     state.act = { s: "failed", f: failureCode(e) };
   }
   render(true);
@@ -1811,6 +1834,15 @@ root.addEventListener("change", (ev) => {
     setLang(el.value as Lang);
     store("genra.lang", el.value);
     render();
+    void api.shellMenu(getLang()).then((m) => (state.shellMenu = m), () => {});
+  } else if (el.name === "shell_menu") {
+    void withPending("shell-menu", () => api.setShellMenu(el.checked, getLang())).then(
+      (m) => {
+        state.shellMenu = m;
+        render();
+      },
+      () => render(),
+    );
   } else if (el.name === "custom_full") {
     state.custom.full = el.checked;
     render();
@@ -1848,6 +1880,7 @@ async function start() {
     state.repairProgress = p;
     if (state.page === "scan" && (state.act.s === "working" || state.act.s === "excel")) render();
   });
+  await api.onOpenPath((path) => void scanPath(path));
   await api.onDropped((paths) => {
     state.dragOver = false;
     if (paths.length) void scanPath(paths[0]);
@@ -1868,6 +1901,8 @@ async function start() {
     state.loaded.settings = true;
   });
   void fill(api.installId(), (id) => (state.installId = id));
+  // The Explorer entry follows the setting, labelled in the window's language (Windows only).
+  void fill(api.shellMenu(getLang()), (m) => (state.shellMenu = m));
   const hist = await api.history().catch(() => ({ entries: [], other_quarantine: [] }) as api.HistoryView);
   state.history = hist;
   state.loaded.history = true;
