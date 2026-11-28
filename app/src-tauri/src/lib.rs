@@ -49,6 +49,9 @@ struct AppState {
     /// Plans shown on the threat screen before the press, by path: "Dọn sạch giúp tôi" runs the
     /// plan the user read when it is still fresh, instead of a new one that may differ.
     previews: Mutex<HashMap<PathBuf, Preview>>,
+    /// Bumped by every "Dọn sạch giúp tôi": a plan computed before the press but finished after it
+    /// is not kept (the press planned for itself, and a later press must not run the older plan).
+    plan_gen: std::sync::atomic::AtomicU64,
 }
 
 /// A plan computed for the threat screen, with the file's hash when it was made.
@@ -276,6 +279,7 @@ async fn plan_repair(app: AppHandle, path: String) -> Result<PlanPreview, repair
     let st = app.state::<AppState>();
     let p = st.allowed(&path).map_err(|e| failure("not_allowed", e))?;
     let rules = st.rules();
+    let gen = st.plan_gen.load(Ordering::SeqCst);
     let a = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let report = repair::precheck(&rules, &p)?;
@@ -288,7 +292,11 @@ async fn plan_repair(app: AppHandle, path: String) -> Result<PlanPreview, repair
             summary_en: plan.summary_en.clone(),
             needs_excel: plan.need().is_some(),
         };
+        // Checked under the lock: a press that started meanwhile has bumped the generation.
         if let Ok(mut m) = st.previews.lock() {
+            if st.plan_gen.load(Ordering::SeqCst) != gen {
+                return Ok(view);
+            }
             m.retain(|_, v| v.at.elapsed() < PREVIEW_FRESH);
             m.insert(p, Preview { plan, sha256: report.sha256.clone(), family: repair::family_of(&report), at: std::time::Instant::now() });
         }
@@ -315,8 +323,9 @@ async fn repair_file(app: AppHandle, path: String) -> Result<RepairView, repair:
     let a = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = a.emit("repair-progress", RepairProgress { phase: "planning", step: None });
-        let report = repair::precheck(&rules, &p)?;
         let st = a.state::<AppState>();
+        st.plan_gen.fetch_add(1, Ordering::SeqCst);
+        let report = repair::precheck(&rules, &p)?;
         // The plan the user just read, when it is fresh; the runner checks each step's
         // preconditions again (hashes, process start times, Excel), so a stale detail fails safe.
         let (plan, family) = take_preview(&st, &p, &report.sha256).unwrap_or_else(|| {
@@ -947,6 +956,7 @@ pub fn run() {
                 pending: Mutex::new(HashMap::new()),
                 overview: Mutex::new(None),
                 previews: Mutex::new(HashMap::new()),
+                plan_gen: std::sync::atomic::AtomicU64::new(0),
                 data,
             };
             app.manage(state);
