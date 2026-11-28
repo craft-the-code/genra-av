@@ -69,6 +69,12 @@ pub fn checked(report: genra_av_core::Report, path: &Path, rules: &Loaded) -> ge
     checked_with(report, path, rules, true).0
 }
 
+/// [`checked`] without asking Defender (an answer it already gave is still used): for the folder
+/// guard, since Defender watches new files itself.
+pub fn checked_quiet(report: genra_av_core::Report, path: &Path, rules: &Loaded) -> genra_av_core::Report {
+    checked_with(report, path, rules, false).0
+}
+
 /// [`checked`], asking Defender only when `defender` is true. Also says what asking did.
 fn checked_with(mut report: genra_av_core::Report, path: &Path, rules: &Loaded, defender: bool) -> (genra_av_core::Report, Outcome) {
     genra_av_machine::rails::signed_file_rail(&mut report, path);
@@ -85,7 +91,12 @@ pub struct Job<'a> {
     pub walk: scanner::Walk<'a>,
 }
 
+/// One job at a time: each loads and saves the shared scan cache, so a USB scan from the guard
+/// and a quick scan side by side would lose each other's entries (the later save wins).
+static JOB: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn run_job(data: &Path, rules: &Loaded, job: &Job, emit: impl Fn(Progress)) -> QuickResult {
+    let _one = JOB.lock().unwrap_or_else(|p| p.into_inner());
     let roots = job.roots;
     let cache_path = data.join("scan-cache.json");
     let mut ctx = scanner::Context::new(Some(&rules.pack), Some(&rules.reputation), Cache::load(&cache_path));

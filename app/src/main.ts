@@ -49,6 +49,10 @@ const state = {
   rules: null as api.RulesInfo | null,
   settings: { send_hashes: false, shell_menu: true } as api.Settings,
   shellMenu: null as api.ShellMenu | null,
+  /** "Canh gác" as Rust reports it, files it found this session (newest first), the last USB scan. */
+  guard: null as api.GuardStatus | null,
+  guardHits: [] as ScanResult[],
+  guardUsb: null as api.GuardUsb | null,
   scan: { status: "idle" } as ScanState,
   act: { s: "idle" } as Act,
   details: false,
@@ -227,7 +231,7 @@ function sidebar(): string {
     <div class="brand">${mark}<span class="brand-name">GENRA <span>AV</span></span></div>
     <nav aria-label="${esc(t("nav.label"))}"><ul class="nav">${items}</ul></nav>
     <div class="side-foot">
-      <div class="line">${line("shield", 16)}<span>${esc(t("footer.guard"))}</span></div>
+      <div class="line">${line("shield", 16)}<span>${esc(guardFooter())}</span></div>
       ${state.update ? `<button class="link footer-update" data-action="goto-update" data-fid="goto-update">${esc(t("update.footer", { version: state.update.version }))}</button>` : ""}
       <div class="line rules">${esc(rulesLine())}</div>
     </div>
@@ -236,8 +240,19 @@ function sidebar(): string {
 
 // ---------- Tổng quan
 
+/** Files found and not dealt with yet: the folder guard's first, then the last scan's. */
 function remainingHits(): ScanResult[] {
-  return state.quick.result?.hits.filter((h) => !state.quick.handled.has(h.path)) ?? [];
+  const all = [...state.guardHits, ...(state.quick.result?.hits ?? [])];
+  const seen = new Set<string>();
+  return all.filter((h) => !state.quick.handled.has(h.path) && !seen.has(h.path) && seen.add(h.path));
+}
+
+function guardFooter(): string {
+  const g = state.guard;
+  if (!g) return t("footer.guard.loading");
+  if (!g.on) return t("footer.guard.off");
+  if (g.scanning) return t("footer.guard.usb", { drive: g.scanning });
+  return t("footer.guard.on");
 }
 
 function lastQuickEntry(): api.Entry | undefined {
@@ -1097,7 +1112,7 @@ function machinePage(): string {
             : "";
       return `<li class="row">${line(guardIcon[g.kind], 18)}<div class="row-text"><div class="row-name">${esc(t(`machine.guard.${g.kind}`))}</div><div class="row-sub">${esc(
         [t("machine.guard.detail"), where].filter(Boolean).join(" · "),
-      )}</div></div><span class="status-word soon">${esc(t("machine.guard.soon"))}</span></li>`;
+      )}</div></div>${guardWord(g)}</li>`;
     })
     .join("");
 
@@ -1120,7 +1135,27 @@ function machinePage(): string {
     </div>`;
 }
 
+/** The live state of one guarded place on "Máy của bạn". */
+function guardWord(g: api.GuardPlace): string {
+  const s = state.guard;
+  if (!s) return "";
+  if (!s.on) return `<span class="status-word soon">${esc(t("machine.guard.off"))}</span>`;
+  if (g.kind === "usb") {
+    if (s.scanning) return `<span class="status-word ok">${esc(t("machine.guard.scanning"))}</span>`;
+    return `<span class="status-word ok">${esc(t("machine.guard.usb.on"))}</span>`;
+  }
+  const watched = g.paths.some((p) => s.folders.includes(p));
+  return watched ? `<span class="status-word ok">${esc(t("machine.guard.on"))}</span>` : "";
+}
+
 // ---------- Cài đặt
+
+function guardToggle(): string {
+  const g = state.guard;
+  return `<label class="toggle"><input type="checkbox" name="guard" data-fid="guard"${g?.on ? " checked" : ""}${state.pending.has("guard") || !g ? " disabled" : ""}>
+    <span class="switch" aria-hidden="true"></span>
+    <span><span class="toggle-title">${esc(t("settings.guard"))}</span><span class="row-sub">${esc(t("settings.guard.text"))}</span></span></label>`;
+}
 
 /** Windows only: the Explorer right-click entry, on by default. */
 function shellMenuToggle(): string {
@@ -1154,6 +1189,7 @@ function settingsPage(): string {
         <label class="toggle"><input type="checkbox" name="send_hashes" data-fid="send-hashes"${state.settings.send_hashes ? " checked" : ""}${state.pending.has("send-hashes") || !state.loaded.settings ? " disabled" : ""}>
           <span class="switch" aria-hidden="true"></span>
           <span><span class="toggle-title">${esc(t("settings.send_hashes"))}</span><span class="row-sub">${esc(t("settings.send_hashes.text"))}</span></span></label>
+        ${guardToggle()}
         ${shellMenuToggle()}
         <div class="install-id">
           <div class="row-text"><span class="toggle-title" id="install-id-label">${esc(t("settings.install_id"))}</span>
@@ -1835,6 +1871,14 @@ root.addEventListener("change", (ev) => {
     store("genra.lang", el.value);
     render();
     void api.shellMenu(getLang()).then((m) => (state.shellMenu = m), () => {});
+  } else if (el.name === "guard") {
+    void withPending("guard", () => api.setGuard(el.checked)).then(
+      (g) => {
+        state.guard = g;
+        render();
+      },
+      () => render(),
+    );
   } else if (el.name === "shell_menu") {
     void withPending("shell-menu", () => api.setShellMenu(el.checked, getLang())).then(
       (m) => {
@@ -1881,6 +1925,20 @@ async function start() {
     if (state.page === "scan" && (state.act.s === "working" || state.act.s === "excel")) render();
   });
   await api.onOpenPath((path) => void scanPath(path));
+  await api.onGuardStatus((g) => {
+    state.guard = g;
+    render();
+  });
+  await api.onGuardHit((r) => {
+    state.guardHits = [r, ...state.guardHits.filter((h) => h.path !== r.path)];
+    state.quick.handled.delete(r.path);
+    void refreshHistory();
+    render();
+  });
+  await api.onGuardUsb((u) => {
+    state.guardUsb = u;
+    render();
+  });
   await api.onDropped((paths) => {
     state.dragOver = false;
     if (paths.length) void scanPath(paths[0]);
@@ -1903,6 +1961,7 @@ async function start() {
   void fill(api.installId(), (id) => (state.installId = id));
   // The Explorer entry follows the setting, labelled in the window's language (Windows only).
   void fill(api.shellMenu(getLang()), (m) => (state.shellMenu = m));
+  void fill(api.guardStatus(), (g) => (state.guard = state.guard ?? g));
   const hist = await api.history().catch(() => ({ entries: [], other_quarantine: [] }) as api.HistoryView);
   state.history = hist;
   state.loaded.history = true;

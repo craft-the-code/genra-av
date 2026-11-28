@@ -18,6 +18,12 @@ versions follow [Semantic Versioning](https://semver.org/). Each GitHub Release 
   language) and removed by the NSIS uninstaller or the new switch in Cài đặt (on by default).
 - One running Genra (`tauri-plugin-single-instance`): a second launch with a file hands it to the open
   window, which comes to the front and checks it.
+- Folder guard ("Canh gác", J1/J8): while the app runs, Downloads and Zalo Received Files are watched
+  with OS file notifications (`notify`), each new or changed file that can carry code is scanned once
+  quiet for 2 s (partial downloads and Office lock files skipped; Defender not asked, it watches new
+  files itself), and a USB stick is scanned when plugged in. A find gives one desktop notification per
+  file content, a history entry, and a row in "Tệp tìm thấy"; nothing is moved without the user.
+  Switch in Cài đặt (on by default); live status in the sidebar and on "Máy của bạn".
 
 ### Changed
 - Dependencies brought up to date: cfb 0.16, getrandom 0.4, windows-sys 0.61, sha2 0.11 and
