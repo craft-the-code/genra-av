@@ -11,7 +11,7 @@ use crate::ScanResult;
 use genra_av_core::rules::Severity;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -61,8 +61,56 @@ impl Settle {
     }
 }
 
+/// How long one file (path and content) gives one notification: the same worm arriving again
+/// later, or under another name, is told again.
+const TELL_AGAIN: Duration = Duration::from_secs(600);
+/// A folder moved or extracted into a watched place is walked this deep, this many files at most.
+const FOLDER_DEPTH: usize = 4;
+const FOLDER_FILES: usize = 2000;
+
+/// Files already told about, by path and content, for [`TELL_AGAIN`].
+#[derive(Default)]
+pub struct Told {
+    seen: HashMap<(String, String), Instant>,
+}
+
+impl Told {
+    /// True the first time this path with this content is seen within [`TELL_AGAIN`].
+    pub fn first(&mut self, path: &str, sha256: &str, now: Instant) -> bool {
+        self.seen.retain(|_, at| now.duration_since(*at) < TELL_AGAIN);
+        let key = (path.to_string(), sha256.to_ascii_lowercase());
+        if self.seen.contains_key(&key) {
+            return false;
+        }
+        self.seen.insert(key, now);
+        true
+    }
+}
+
+/// Files worth scanning under a folder that arrived whole (moved in, extracted): a watcher on
+/// Windows reports the folder only, not each file in it.
+pub fn files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            if out.len() >= FOLDER_FILES {
+                return out;
+            }
+            let p = e.path();
+            match e.file_type() {
+                Ok(t) if t.is_dir() && !t.is_symlink() && depth < FOLDER_DEPTH && !genra_av_core::targets::skip_dir(&p) => stack.push((p, depth + 1)),
+                Ok(t) if t.is_file() && worth(&p) => out.push(p),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Where the guard looks, as the window shows it.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Status {
     pub on: bool,
     /// Folders watched now (Downloads, Zalo received files that exist).
@@ -119,17 +167,21 @@ fn notification(lang: &str, hit: &ScanResult, place: &str) -> (String, String) {
     }
 }
 
-/// The place a path is in, for the notification ("Downloads", "Zalo", the drive).
-fn place_of(path: &Path, lang: &str) -> String {
+/// The watched place a path is in, for the notification ("Downloads", "Zalo").
+fn place_of(path: &Path) -> String {
     let s = path.to_string_lossy().to_ascii_lowercase();
     if s.contains("zalo received files") {
         "Zalo".into()
     } else if s.contains("downloads") {
         "Downloads".into()
     } else {
-        let root = path.ancestors().last().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default();
-        if lang == "en" { format!("USB drive {root}") } else { format!("USB {root}") }
+        path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     }
+}
+
+fn usb_place(drive: &Path, lang: &str) -> String {
+    let d = drive.to_string_lossy();
+    if lang == "en" { format!("USB drive {d}") } else { format!("USB {d}") }
 }
 
 /// What the window hears when a drive scan starts and ends.
@@ -140,15 +192,16 @@ struct UsbScan {
     hits: usize,
 }
 
-/// One find: allowed for the window, kept in the history, notified once per file content.
-fn found(app: &AppHandle, hit: ScanResult, told: &mut HashSet<String>) {
+/// One find: allowed for the window, kept in the history, notified once per path and content
+/// within [`TELL_AGAIN`] (a file rewritten in place raises several events).
+fn found(app: &AppHandle, hit: ScanResult, told: &mut Told, place: impl FnOnce(&str) -> String) {
     let st = app.state::<crate::AppState>();
     st.allow(Path::new(&hit.path));
-    if !told.insert(hit.report.sha256.clone()) {
+    if !told.first(&hit.path, &hit.report.sha256, Instant::now()) {
         return;
     }
     let lang = st.lang();
-    let (title, body) = notification(&lang, &hit, &place_of(Path::new(&hit.path), &lang));
+    let (title, body) = notification(&lang, &hit, &place(&lang));
     {
         use tauri_plugin_notification::NotificationExt;
         let _ = app.notification().builder().title(title).body(body).show();
@@ -157,14 +210,31 @@ fn found(app: &AppHandle, hit: ScanResult, told: &mut HashSet<String>) {
     let _ = app.emit("guard-hit", &hit);
 }
 
+/// Changes the status; the window hears about it only when something changed (it re-renders).
 fn set_status(app: &AppHandle, f: impl FnOnce(&mut Status)) {
     let st = app.state::<crate::AppState>();
     let s = {
         let Ok(mut s) = st.guard.lock() else { return };
+        let before = s.clone();
         f(&mut s);
+        if *s == before {
+            return;
+        }
         s.clone()
     };
     let _ = app.emit("guard-status", s);
+}
+
+/// Drives being scanned now (two sticks plugged in together each get a scan).
+static SCANNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn scanning_changed(app: &AppHandle, f: impl FnOnce(&mut Vec<String>)) {
+    let first = {
+        let Ok(mut v) = SCANNING.lock() else { return };
+        f(&mut v);
+        v.first().cloned()
+    };
+    set_status(app, |s| s.scanning = first);
 }
 
 /// Scans a drive that was just plugged in, on its own thread (a big stick takes a while).
@@ -172,7 +242,7 @@ fn scan_drive(app: &AppHandle, drive: PathBuf) {
     let a = app.clone();
     std::thread::spawn(move || {
         let label = drive.to_string_lossy().into_owned();
-        set_status(&a, |s| s.scanning = Some(label.clone()));
+        scanning_changed(&a, |v| v.push(label.clone()));
         let _ = a.emit("guard-usb", UsbScan { drive: label.clone(), done: false, hits: 0 });
         let st = a.state::<crate::AppState>();
         let rules = st.rules();
@@ -184,11 +254,11 @@ fn scan_drive(app: &AppHandle, drive: PathBuf) {
         let job = crate::quick::Job { scope: "usb", roots: &roots, walk };
         let result = crate::quick::run_job(&st.data, &rules, &job, |_| {});
         let n = result.hits.len();
-        let mut told = HashSet::new();
+        let mut told = Told::default();
         for h in result.hits {
-            found(&a, h, &mut told);
+            found(&a, h, &mut told, |lang| usb_place(&drive, lang));
         }
-        set_status(&a, |s| s.scanning = None);
+        scanning_changed(&a, |v| v.retain(|d| d != &label));
         let _ = a.emit("guard-usb", UsbScan { drive: label, done: true, hits: n });
     });
 }
@@ -203,7 +273,7 @@ pub fn start(app: AppHandle) {
         let mut asked: Vec<PathBuf> = Vec::new();
         let mut watched: Vec<PathBuf> = Vec::new();
         let mut settle = Settle::default();
-        let mut told: HashSet<String> = HashSet::new();
+        let mut told = Told::default();
         let mut drives: Option<Vec<PathBuf>> = None;
         let mut last_look = Instant::now() - LOOK_EVERY;
         loop {
@@ -257,8 +327,17 @@ pub fn start(app: AppHandle) {
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Ok(ev)) => {
                     if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(_)) {
-                        for p in ev.paths.into_iter().filter(|p| worth(p)) {
-                            settle.note(p, Instant::now());
+                        for p in ev.paths {
+                            if p.is_dir() {
+                                // A folder moved or extracted in arrives as one event.
+                                if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))) {
+                                    for f in files_in(&p) {
+                                        settle.note(f, Instant::now());
+                                    }
+                                }
+                            } else if worth(&p) {
+                                settle.note(p, Instant::now());
+                            }
                         }
                     }
                 }
@@ -272,7 +351,8 @@ pub fn start(app: AppHandle) {
             let rules = app.state::<crate::AppState>().rules();
             for p in ready {
                 if let Some(r) = scan_one(&p, &rules).filter(is_hit) {
-                    found(&app, r, &mut told);
+                    let place = place_of(Path::new(&r.path));
+                    found(&app, r, &mut told, |_| place);
                 }
             }
         }
@@ -306,8 +386,34 @@ mod tests {
 
     #[test]
     fn places_in_notifications() {
-        assert_eq!(place_of(Path::new("/Users/lan/Downloads/a.xls"), "vi"), "Downloads");
-        assert_eq!(place_of(Path::new("/Users/lan/Documents/Zalo Received Files/a.xls"), "vi"), "Zalo");
+        assert_eq!(place_of(Path::new("/Users/lan/Downloads/a.xls")), "Downloads");
+        assert_eq!(place_of(Path::new("/Users/lan/Documents/Zalo Received Files/a.xls")), "Zalo");
+        assert_eq!(usb_place(Path::new("E:\\"), "vi"), "USB E:\\");
+        assert_eq!(usb_place(Path::new("/Volumes/KINGSTON"), "en"), "USB drive /Volumes/KINGSTON");
+    }
+
+    #[test]
+    fn told_once_per_path_and_content_for_a_while() {
+        let t0 = Instant::now();
+        let mut t = Told::default();
+        assert!(t.first("/d/a.xls", "AB", t0));
+        assert!(!t.first("/d/a.xls", "ab", t0 + Duration::from_secs(5)), "same file rewritten");
+        assert!(t.first("/d/a (1).xls", "ab", t0 + Duration::from_secs(5)), "same worm, another name");
+        assert!(t.first("/d/a.xls", "ab", t0 + TELL_AGAIN + Duration::from_secs(1)), "arrives again later");
+    }
+
+    #[test]
+    fn a_folder_that_arrives_whole_is_walked() {
+        let dir = std::env::temp_dir().join(format!("genra-guard-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("giai_nen/sub")).unwrap();
+        std::fs::write(dir.join("giai_nen/bao_cao.xlsm"), b"x").unwrap();
+        std::fs::write(dir.join("giai_nen/sub/hoadon.js"), b"x").unwrap();
+        std::fs::write(dir.join("giai_nen/anh.jpg"), b"x").unwrap();
+        let mut got = files_in(&dir.join("giai_nen"));
+        got.sort();
+        assert_eq!(got, vec![dir.join("giai_nen/bao_cao.xlsm"), dir.join("giai_nen/sub/hoadon.js")]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
