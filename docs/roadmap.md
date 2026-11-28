@@ -47,7 +47,8 @@ Catch and clean the common malware people get, not only Office macros, while sta
 
 ## Next (0.3): reach and fewer steps
 
-Open as PRs #31 to #38 (27/11), stacked in that order; none merged yet.
+#31 to #36 merged on 28/11 after an independent review (10 findings, 8 fixed in their PRs). #37 and
+#38 are open, waiting on the points above. Not released yet: the next tag is 0.3.
 
 - [x] Folder guard: Downloads, Zalo and USB sticks watched live while Genra runs, scan on arrival,
       notify only when something is found (J1, J8; #35). Tray, close-to-tray and "Mở cùng máy" so it
@@ -61,6 +62,9 @@ Open as PRs #31 to #38 (27/11), stacked in that order; none merged yet.
 - [x] Threat screen shows the computed repair plan before the press (#32).
 - [x] Dependencies brought up to date (#31). Left for their own PRs: `zip` 2 → 9 (API change in the
       archive reader), `reqwest` 0.13 (waits for the Tauri updater).
+- Follow-ups from the review: a mounted macOS disk image counts as a USB drive (`removable_volumes`,
+  shared with the quick scan), and the guard asks `diskutil` about each volume every 5 s; an MSI
+  uninstall leaves the per-user Explorer entry and login item behind (NSIS removes the Explorer entry).
 
 ## Later
 
